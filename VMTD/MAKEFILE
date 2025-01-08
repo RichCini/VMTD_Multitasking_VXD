@@ -1,0 +1,109 @@
+# sample make file for building vfd virtual device for Windows/386
+
+# comment this definition out with a "#", if building a non-debugging version
+!IFNDEF RETAIL
+DEFS=-DDEBUG
+!ENDIF
+
+DOSCFLAGS = -AS -nologo $(DEFS)
+DOSLFLAGS =
+WINCFLAGS = -c -f -AM -Od -Gsw -W3 -Zipe -nologo $(DEFS)
+WINLFLAGS = /CO /NOD /align:16 /m
+VXDLFLAGS = /NOI /NOD /NOP /MAP
+VXDMFLAGS = -l -p -w2 -Mx $(DEFS) -I..\include
+RCFLAGS   = -r
+
+#Debug=-DDEBUG
+
+.asm.obj:
+        masm5 $(VXDMFLAGS) $*;
+
+.c.obj:
+        cl $(WINCFLAGS) $*.c
+
+.rc.res:
+        rc $(RCFLAGS) $*.rc 
+
+DOSOBJS =      
+VXDOBJS =      vmtd.obj
+WINOBJS =      createvm.obj cvm.obj govm.obj vmid.obj
+
+all:           vmtd.386 createvm.exe cvm.exe govm.exe vmid.exe
+
+#MASMOBJ=masm5 -l -p -w2 -Mx $(DEFS) -I..\include 
+#MASMLST=masm5 -l -p -w2 -Mx $(DEFS) -I..\include 
+
+#.asm.obj:
+#        $(MASMOBJ) $*;
+
+#.asm.lst:
+#        $(MASMLST) $*;
+
+#all:    vmtd.386
+
+vmtd.obj vmtd.lst: vmtd.asm ..\include\vmm.inc ..\include\vkd.inc ..\include\debug.inc ..\include\vdd.inc
+vmtd.386: vmtd.def $(VXDOBJS)
+	  link386 $(VXDLFLAGS) @<<
+          addhdr vmtd.386
+          mapsym32 vmtd
+
+createvm.obj:	createvm.c
+		cl $(WINCFLAGS) $*.c
+
+createvm.exe:	$(WINOBJS) createvm.def
+		link $(WINLFLAGS) @<<
+$(WINOBJS)
+createvm.exe
+createvm.map
+libw mlibcew
+createvm.def
+<<
+		mapsym createvm
+
+cvm.obj: 	cvm.c
+		cl $(WINCFLAGS) $*.c
+
+cvm.exe:	$(WINOBJS) cvm.def
+		link $(WINLFLAGS) @<<
+$(WINOBJS)
+cvm.exe
+cvm.map
+libw mlibcew
+cvm.def
+<<
+
+govm.obj:
+		cl $(WINCFLAGS) $*.c
+
+govm.exe:	$(WINOBJS) govm.def
+		link $(WINLFLAGS) @<<
+$(WINOBJS)
+govm.exe
+govm.map
+libw mlibcew
+govm.def
+<<
+
+vmid.obj:
+		cl $(WINCFLAGS) $*.c
+
+vmid.exe:	$(WINOBJS) vmid.def
+		link $(WINLFLAGS) @<<
+$(WINOBJS)
+vmid.exe
+vmid.map
+libw mlibcew
+vmid.def
+<<
+
+#OBJS =  vmtd.obj vmtd.obj 
+
+
+clean:
+	del *.386
+	del *.exe
+	del *.res
+	del *.obj
+	del *.lst
+	del *.sym
+

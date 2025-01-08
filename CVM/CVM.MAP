@@ -1,0 +1,50 @@
+
+ Start  Stop   Length Name                   Class
+ 00000H 01A18H 01A19H _TEXT                  CODE
+ 01A20H 01A21H 00002H EMULATOR_TEXT          CODE
+ 01A22H 01A22H 00000H C_ETEXT                ENDCODE
+ 01A30H 01A30H 00000H EMULATOR_DATA          FAR_DATA
+ 01A30H 01A71H 00042H NULL                   BEGDATA
+ 01A72H 01EA3H 00432H _DATA                  DATA
+ 01EA4H 01EA5H 00002H XIQC                   DATA
+ 01EA6H 01EB1H 0000CH DBDATA                 DATA
+ 01EB2H 01EBFH 0000EH CDATA                  DATA
+ 01EC0H 01EC0H 00000H XIFB                   DATA
+ 01EC0H 01EC0H 00000H XIF                    DATA
+ 01EC0H 01EC0H 00000H XIFE                   DATA
+ 01EC0H 01EC0H 00000H XIB                    DATA
+ 01EC0H 01EC0H 00000H XI                     DATA
+ 01EC0H 01EC0H 00000H XIE                    DATA
+ 01EC0H 01EC0H 00000H XPB                    DATA
+ 01EC0H 01EC1H 00002H XP                     DATA
+ 01EC2H 01EC2H 00000H XPE                    DATA
+ 01EC2H 01EC2H 00000H XCB                    DATA
+ 01EC2H 01EC2H 00000H XC                     DATA
+ 01EC2H 01EC2H 00000H XCE                    DATA
+ 01EC2H 01EC2H 00000H XCFB                   DATA
+ 01EC2H 01EC2H 00000H XCFCRT                 DATA
+ 01EC2H 01EC2H 00000H XCF                    DATA
+ 01EC2H 01EC2H 00000H XCFE                   DATA
+ 01EC2H 01EC2H 00000H XIFCB                  DATA
+ 01EC2H 01EC2H 00000H XIFU                   DATA
+ 01EC2H 01EC2H 00000H XIFL                   DATA
+ 01EC2H 01EC2H 00000H XIFM                   DATA
+ 01EC2H 01EC2H 00000H XIFCE                  DATA
+ 01EC2H 01EC2H 00000H CONST                  CONST
+ 01EC2H 01EC9H 00008H HDR                    MSG
+ 01ECAH 01F9FH 000D6H MSG                    MSG
+ 01FA0H 01FA1H 00002H PAD                    MSG
+ 01FA2H 01FA2H 00001H EPAD                   MSG
+ 01FA4H 01FABH 00008H _BSS                   BSS
+ 01FACH 01FACH 00000H XOB                    BSS
+ 01FACH 01FACH 00000H XO                     BSS
+ 01FACH 01FACH 00000H XOE                    BSS
+ 01FACH 01FACH 00000H XOFB                   BSS
+ 01FACH 01FACH 00000H XOF                    BSS
+ 01FACH 01FACH 00000H XOFE                   BSS
+ 01FB0H 027AFH 00800H STACK                  STACK
+
+ Origin   Group
+ 01A3:0   DGROUP
+
+Program entry point at 0000:03A2

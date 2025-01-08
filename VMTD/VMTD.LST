@@ -1,0 +1,1756 @@
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-1
+
+
+				PAGE 58,132
+				;******************************************************************************
+				TITLE VMTD - MultiTasking DOS VxD
+				;******************************************************************************
+				;
+				;   Title:      VMTD.ASM - MultiTasking DOS VxD (JulieEli)
+				;
+				;   Version:    1.10
+				;  
+				;   VxD that allows running/switching VMs without the Windows GUI
+				;
+				;   All rights reserved, James Eli  2/10/96
+				;
+				;   WARNING: Not tested with Windows95, and come to think of it, not tested
+				;   much at all!  Use at your own risk.  Also, uses nonregistered Device ID!
+				;
+				;   Compile with:
+				;   Link with:
+				;
+				;   To utilize this:  First rename COMMAND.COM > KRNL386.EXE, and place it in
+				;   the \WINDOWS\SYSTEM directory (save the actual KRNL386.EXE file).  Make
+				;   sure your SYSTEM.INI utilizes the standard MS VDDVGA VxD and drivers for
+				;   the video (this is important, or when switching back to the SysVM things
+				;   will be blank!).  Add a line in the SYSTEM.INI file under the [386Enh]
+				;   section like this: 'device=c:\WINDOWS\VMTD.386'  Start up windows 3.xx 
+				;   as usual with WIN.COM, but instead of seeing the familiar windows GUI,
+				;   you'll be looking at the old DOS prompt, yet its all there; VMM, etc.
+				;   Just run the CVM.EXE program in the SysVM (SHELL VxD provides no V86 API),
+				;   and a new VM will be created (run VMID for proof).  Use CTRL-PgUp hotkey
+				;   combo to hot-switch between VMs.  You've now got a multitasking DOS OS 
+				;   without all of the windows overhead--exactly what Windows is all about!
+				;
+				; 2019/09/19 - revised to add defined constants to MT_HotKey_Handler
+				; 2023/11/03 - added random commentary.
+				;
+				;==============================================================================
+				
+					.386p
+				
+				;******************************************************************************
+				;                             I N C L U D E S
+				;******************************************************************************
+				
+				        .LIST
+				
+				;******************************************************************************
+				;                               E Q U A T E S
+				;******************************************************************************
+ = 3C8D				MT_DEVICE_ID	EQU 03C8Dh	;; my VXDID
+ = 0001				MAJOR_VERSION	EQU 1
+ = 0001				MINOR_VERSION	EQU 1
+				
+				;******************************************************************************
+				;              V I R T U A L   D E V I C E   D E C L A R A T I O N
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-2
+
+
+				;------------------------------------------------------------------------------
+				; The VxD declaration statement defines the VxD name, version number,
+				; control proc entry point, VxD ID, initialization order, and VM API 
+				; entry points. What follows is a minimal VxD declaration, defining 
+				; only the name, version, control proc, and an undefined ID. Depending
+				; on the requirements of the VxD, the following may be added:
+				;
+				; - Defined VxD ID: See VXDID.TXT for more information
+				; - Init order: If your Vxd MUST load before or after a specific VxD,
+				;               the init order can be defined. See VMM.INC for the
+				;               definition of the init order of the standard devices.
+				; - V86,PM API: You may wish to allow application or library code running
+				;               in a virtual machine to communicate with your VxD directly.
+				;               See the chapter entitled "VxD APIs (Call-Ins)" in the
+				;               Virtual Device Adaptation Guide.
+				;               
+				;******************************************************************************
+				Declare_Virtual_Device JulieEli, MAJOR_VERSION, MINOR_VERSION, \
+			      \	    MT_Control_Proc, MT_DEVICE_ID, Undefined_Init_Order, \
+			      \	    MT_PM_API_Proc, MT_PM_API_Proc
+ 0000                         2	_LDATA	 SEGMENT 
+ 0000  00000000               1	JulieEli_DDB VxD_Desc_Block <,,MT_DEVICE_ID,MAJOR_VERSION,MINOR_VERSION,,"JulieEli",Undefined_Init_O
+				rder,			 OFFSET32 MT_Control_Proc, ??0000, ??0001, 			 ,,,??0002, 
+				??0003> 
+ 0004  0A03                   1	
+ 0006  8D3C                   1	
+ 0008  01                     1	
+ 0009  01                     1	
+ 000A  0000                   1	
+ 000C  4A756C6965456C69       1	
+ 0014  00000080               1	
+ 0018  000000C3 R             1	
+ 001C  00000000 R             1	
+ 0020  00000000 R             1	
+ 0024  00000000               1	
+ 0028  00000000               1	
+ 002C  00000000               1	
+ 0030  00000000               1	
+ 0034  00000000               1	
+ 0038                         2	_LDATA	 ENDS 
+				
+				;******************************************************************************
+				;                                D A T A
+				;******************************************************************************
+				;----------- VXD IDATA
+				VxD_IDATA_SEG
+ 0000                         1	_IDATA	SEGMENT 
+				;       Initialization data here - discarded after Init_Complete
+				VxD_IDATA_ENDS
+ 0000                         1	_IDATA	ENDS 
+				
+				
+				;----------- VXD DATA
+				VxD_DATA_SEG
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-3
+
+
+ 0038                         1	_LDATA	 SEGMENT 
+				
+ 0038  00000000			ghhkCtrlPgUp	dd 00000000h               ; Hotkey handle
+				
+ 003C				MT_PM_Call_Table LABEL DWORD
+ 003C  00000027 R			dd      OFFSET32 MT_Get_Version     ; PMAPI #0
+ 0040  00000040 R			dd      OFFSET32 MT_HotKey_Handler  ; PMAPI #1
+ = 0002				Max_MT_PM_Service equ ($-MT_PM_Call_Table)/4
+				
+				VxD_DATA_ENDS
+ 0044                         1	_LDATA	 ENDS 
+				
+				
+				;----------- VXD LOCKED_DATA
+				VxD_LOCKED_DATA_SEG
+ 0044                         1	_LDATA	 SEGMENT 
+				;       Pagelocked data here - try to keep this to a minimum.
+				VxD_LOCKED_DATA_ENDS
+ 0044                         1	_LDATA	 ENDS 
+				
+				
+				;******************************************************************************
+				;                               C O D E
+				;------------------------------------------------------------------------------
+				; The 'body' of the VxD would typically be in the standard code segment.
+				;******************************************************************************
+				VxD_CODE_SEG
+ 0000                         1	_LTEXT	 SEGMENT 
+				;******************************************************************************
+				;
+				;   VXD_PM_API_Proc
+				;
+				;   DESCRIPTION:
+				;       This is the PM_API dispatch routine which dispatches API calls to the
+				;	proper API routine. 
+				;
+				;   ENTRY:
+				;	EBX: Current VM handle
+				;	EBP -> client register structure
+				;		.AX: function code
+				;
+				;   EXIT:
+				;       Carry set on error; client_EAX set to -1
+				;
+				;   USES:
+				;
+				;==============================================================================
+				BeginProc MT_PM_API_Proc, PUBLIC
+ 0000                         1	MT_PM_API_Proc PROC NEAR 
+ 0000  CD 20                  3		int	Dyna_Link_Int 
+ 0002  000100CB               3		dd	Log_Proc_Call 
+ 0006  0F B7 45 1C			movzx	eax,[ebp.Client_AX]		; function in AX
+ 000A  83 F8 02				cmp 	eax,Max_MT_PM_Service           ; illegal call?
+ 000D  73 0C				jae 	SHORT PMCallBad
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-4
+
+
+ 000F  83 65 2C FE			and 	[ebp.Client_EFLAGS],NOT CF_Mask ; clear carry
+ 0013  FF 1485 0000003C R		call 	MT_PM_Call_Table[eax*4]		; call service
+ 001A  C3				ret
+				
+ 001B				PMCallBad:
+ 001B  C7 45 1C FFFFFFFF		mov	[ebp.Client_EAX],0FFFFFFFFh
+ 0022  83 4D 2C 01			or  	[ebp.Client_EFLAGS],CF_Mask     ; set carry
+ 0026  C3				ret
+				EndProc MT_PM_API_Proc
+ 0027                         1	MT_PM_API_Proc ENDP 
+				
+				;******************************************************************************
+				;
+				;   VXD_Get_Version
+				;
+				;   DESCRIPTION:
+				;       Get driver version.
+				;
+				;   ENTRY:
+				;
+				;   EXIT:
+				;
+				;   USES:
+				;       flags
+				;
+				;==============================================================================
+				BeginProc MT_Get_Version
+ 0027                         1	MT_Get_Version PROC NEAR 
+ 0027  CD 20                  3		int	Dyna_Link_Int 
+ 0029  000100CB               3		dd	Log_Proc_Call 
+					VMMcall Get_Cur_VM_Handle           
+ 002D  CD 20                  2		int	Dyna_Link_Int 
+ 002F  00010001               2		dd	Get_Cur_VM_Handle 
+ 0033  B8 00000101			mov 	eax,MAJOR_VERSION SHL 8 or MINOR_VERSION
+ 0038  66| 89 45 18			mov 	[ebp.Client_CX],ax              ; cx = vxd version number
+ 003C  89 5D 1C				mov 	[ebp.Client_EAX],ebx            ; eax = current vm handle
+ 003F  C3				ret 
+				EndProc MT_Get_Version
+ 0040                         1	MT_Get_Version ENDP 
+				
+				;******************************************************************************
+				;
+				;   VXD_HotKey_Handler
+				;
+				;   DESCRIPTION:
+				;       Handle hot keys
+				;
+				;   ENTRY:
+				;
+				;   EXIT:
+				;
+				;   USES:
+				;       flags
+				; NOTE: check to see if the call to TimeSlicePriority compiles with OK values.
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-5
+
+
+				;==============================================================================
+				BeginProc MT_HotKey_Handler
+ 0040                         1	MT_HotKey_Handler PROC NEAR 
+ 0040  CD 20                  3		int	Dyna_Link_Int 
+ 0042  000100CB               3		dd	Log_Proc_Call 
+					VMMcall Get_Cur_VM_Handle
+ 0046  CD 20                  2		int	Dyna_Link_Int 
+ 0048  00010001               2		dd	Get_Cur_VM_Handle 
+					VMMcall Get_Next_VM_Handle		; saves to EBX
+ 004C  CD 20                  2		int	Dyna_Link_Int 
+ 004E  0001003B               2		dd	Get_Next_VM_Handle 
+ 0052  B8 00000001			mov 	eax,1
+ 0057  50			    	push 	eax
+ 0058  B9 00000005			mov	ecx,BLOCK_SVC_INTS+BLOCK_ENABLE_INTS	;05h
+				    	VMMcall Begin_Critical_Section
+ 005D  CD 20                  2		int	Dyna_Link_Int 
+ 005F  0001001F               2		dd	Begin_Critical_Section 
+ 0063  B8 0000000F		    	mov 	eax,SET_DEVICE_FOCUS		;0fh
+ 0068  BA 0000000D		    	mov 	edx,VKD_DEVICE_ID		;0dh
+				    	VMMcall System_Control
+ 006D  CD 20                  2		int	Dyna_Link_Int 
+ 006F  00010093               2		dd	System_Control 
+ 0073  B8 0000000F		   	mov 	eax,SET_DEVICE_FOCUS		;0fh
+ 0078  BA 00000009		    	mov 	edx,REBOOT_DEVICE_ID		;0ah
+				    	VMMcall System_Control
+ 007D  CD 20                  2		int	Dyna_Link_Int 
+ 007F  00010093               2		dd	System_Control 
+ 0083  B8 0000000F		    	mov 	eax,SET_DEVICE_FOCUS		;0fh
+ 0088  BA 0000000A		    	mov 	edx,VDD_DEVICE_ID		;0ch
+				    	VMMcall System_Control
+ 008D  CD 20                  2		int	Dyna_Link_Int 
+ 008F  00010093               2		dd	System_Control 
+ 0093  53			    	push 	ebx
+				    	VMMcall Get_Sys_VM_Handle
+ 0094  CD 20                  2		int	Dyna_Link_Int 
+ 0096  00010003               2		dd	Get_Sys_VM_Handle 
+				    	VMMcall Get_Time_Slice_Priority
+ 009A  CD 20                  2		int	Dyna_Link_Int 
+ 009C  00010032               2		dd	Get_Time_Slice_Priority 
+ 00A0  25 FFFFFDFF		    	and 	eax, NOT(VMSTAT_High_Pri_Back)	;0fffffdffh
+ 00A5  83 C8 02			    	or 	eax,VMSTAT_Background		;2
+				    	VMMcall Set_Time_Slice_Priority
+ 00A8  CD 20                  2		int	Dyna_Link_Int 
+ 00AA  00010033               2		dd	Set_Time_Slice_Priority 
+ 00AE  5B			    	pop 	ebx
+				    	VMMcall Set_Execution_Focus
+ 00AF  CD 20                  2		int	Dyna_Link_Int 
+ 00B1  00010031               2		dd	Set_Execution_Focus 
+				    	VMMcall Get_Sys_VM_Handle
+ 00B5  CD 20                  2		int	Dyna_Link_Int 
+ 00B7  00010003               2		dd	Get_Sys_VM_Handle 
+				    	VMMcall End_Critical_Section
+ 00BB  CD 20                  2		int	Dyna_Link_Int 
+ 00BD  00010020               2		dd	End_Critical_Section 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-6
+
+
+ 00C1  58			    	pop 	eax
+ 00C2  C3			    	ret
+				EndProc MT_HotKey_Handler
+ 00C3                         1	MT_HotKey_Handler ENDP 
+				
+				VxD_CODE_ENDS
+ 00C3                         1	_LTEXT	 ENDS 
+				
+				;******************************************************************************
+				;                      P A G E   L O C K E D   C O D E
+				;------------------------------------------------------------------------------
+				;       Memory is a scarce resource. Use this only where necessary.
+				;******************************************************************************
+				VxD_LOCKED_CODE_SEG
+ 00C3                         1	_LTEXT	 SEGMENT 
+				;******************************************************************************
+				;
+				;   VXD_Control
+				;
+				;   DESCRIPTION:
+				;
+				;       This is a call-back routine to handle the messages that are sent
+				;       to VxD's to control system operation. Every VxD needs this function
+				;       regardless if messages are processed or not. The control proc must
+				;       be in the LOCKED code segment.
+				;
+				;       The Control_Dispatch macro used in this procedure simplifies
+				;       the handling of messages. To handle a particular message, add
+				;       a Control_Dispatch statement with the message name, followed
+				;       by the procedure that should handle the message. 
+				;
+				;       A VxD is not required to handle any messages.
+				;
+				;   ENTRY:
+				;       EAX = Message number
+				;       EBX = VM Handle
+				;
+				;==============================================================================
+				BeginProc MT_Control_Proc
+ 00C3                         1	MT_Control_Proc PROC NEAR 
+ 00C3  CD 20                  3		int	Dyna_Link_Int 
+ 00C5  000100CB               3		dd	Log_Proc_Call 
+					Control_Dispatch Sys_Critical_Init,	MT_Sys_Critical_Init
+ 00C9  83 F8 00               1		cmp	eax, Sys_Critical_Init 
+ 00CC  75 05                  1		jne	SHORT ??000C 
+ 00CE  E9 00000000 R          1		jmp	MT_Sys_Critical_Init 
+ 00D3                         1	??000C: 
+					Control_Dispatch Device_Init, 		MT_Device_Init
+ 00D3  83 F8 01               1		cmp	eax, Device_Init 
+ 00D6  75 05                  1		jne	SHORT ??000D 
+ 00D8  E9 00000017 R          1		jmp	MT_Device_Init 
+ 00DD                         1	??000D: 
+					Control_Dispatch Init_Complete,		VMTD_Init_Complete
+ 00DD  83 F8 02               1		cmp	eax, Init_Complete 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-7
+
+
+ 00E0  75 05                  1		jne	SHORT ??000E 
+ 00E2  E9 00000089 R          1		jmp	VMTD_Init_Complete 
+ 00E7                         1	??000E: 
+ 00E7  F8				clc
+ 00E8  C3				ret
+				EndProc MT_Control_Proc
+ 00E9                         1	MT_Control_Proc ENDP 
+				
+				VxD_LOCKED_CODE_ENDS
+ 00E9                         1	_LTEXT	 ENDS 
+				
+				
+				;******************************************************************************
+				;                  I N I T I A L I Z A T I O N   C O D E
+				;------------------------------------------------------------------------------
+				;    Code in the initialization segment is discarded after Init_Complete
+				;******************************************************************************
+				VxD_ICODE_SEG
+ 0000                         1	_ITEXT	SEGMENT 
+				;******************************************************************************
+				;
+				;   VXD_Sys_Critical_Init
+				;
+				;   DESCRIPTION:
+				;       This code is called during the first phase of PM initialization.
+				;
+				;   ENTRY:
+				;       EBX = System VM handle
+				;
+				;   EXIT:
+				;       Carry clear to indicate load success
+				;       Carry set to abort loading this VxD
+				;
+				;   USES:
+				;       flags
+				;
+				;==============================================================================
+				BeginProc MT_Sys_Critical_Init
+ 0000                         1	MT_Sys_Critical_Init PROC NEAR 
+ 0000  CD 20                  3		int	Dyna_Link_Int 
+ 0002  000100CB               3		dd	Log_Proc_Call 
+					Trace_Out "VMTD: Sys Critical Init"
+ 0044                         1	_LDATA SEGMENT 
+ 0044  56 4D 54 44 3A 20      1	??0011 db	"VMTD: Sys Critical Init" 
+ 005B  0D 0A                  1		db	0Dh,0Ah 
+ 005D  00                     1		db	0 
+ 005E                         1	_LDATA ENDS 
+ 0006  9C                     1		pushfd 
+ 0007  60                     1		pushad 
+ 0008  BE 00000044 R          1		mov	esi, OFFSET32 ??0011 
+ 000D  CD 20                  3		int	Dyna_Link_Int 
+ 000F  000100C2               3		dd	Out_Debug_String 
+ 0013  61                     1		popad 
+ 0014  9D                     1		popfd 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-8
+
+
+ 0015  F8				clc                                 ; nothing to do here
+ 0016  C3				ret
+				EndProc MT_Sys_Critical_Init
+ 0017                         1	MT_Sys_Critical_Init ENDP 
+				
+				
+				;******************************************************************************
+				;
+				;   VXD_Device_Init
+				;
+				;   DESCRIPTION:
+				;       Code called during the second phase of PM initialization.
+				;
+				;   ENTRY:
+				;       EBX = System VM handle
+				;
+				;   EXIT:
+				;       Carry clear to indicate load success
+				;       Carry set to abort loading this VxD
+				;
+				;   USES:
+				;       flags
+				;
+				;==============================================================================
+				BeginProc MT_Device_Init
+ 0017                         1	MT_Device_Init PROC NEAR 
+ 0017  CD 20                  3		int	Dyna_Link_Int 
+ 0019  000100CB               3		dd	Log_Proc_Call 
+					Trace_Out "VMTD: VxD Device Init"
+ 005E                         1	_LDATA SEGMENT 
+ 005E  56 4D 54 44 3A 20      1	??0014 db	"VMTD: VxD Device Init" 
+ 0073  0D 0A                  1		db	0Dh,0Ah 
+ 0075  00                     1		db	0 
+ 0076                         1	_LDATA ENDS 
+ 001D  9C                     1		pushfd 
+ 001E  60                     1		pushad 
+ 001F  BE 0000005E R          1		mov	esi, OFFSET32 ??0014 
+ 0024  CD 20                  3		int	Dyna_Link_Int 
+ 0026  000100C2               3		dd	Out_Debug_String 
+ 002A  61                     1		popad 
+ 002B  9D                     1		popfd 
+				    	VMMcall Get_VMM_Version 		; check VMM version
+ 002C  CD 20                  2		int	Dyna_Link_Int 
+ 002E  00010000               2		dd	Get_VMM_Version 
+ 0032  66| 3D 030A		    	cmp 	ax,30ah
+ 0036  72 4F			    	jb 	SHORT ExitFailure 		; 3.0 or earlier, so bug out...
+				    	VxDcall VDD_Get_Version 		; check VDD version
+ 0038  CD 20                  1		int	Dyna_Link_Int 
+ 003A  000A0000               1		dd	VDD_Get_Version 
+ 003E  66| 3D 030A		    	cmp 	ax,30ah 			; we're looking for MS VDDVGA.386
+ 0042  75 20			    	jne 	SHORT NoModifyVDDflag           
+ 0044  8B 06			    	mov 	eax,[esi] 			; check VDD 8-byte ID string
+ 0046  3D 45444956		    	cmp 	eax,'EDIV'			; should be = VIDEOVGA
+ 004B  75 17			    	jne 	SHORT NoModifyVDDflag
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-9
+
+
+ 004D  8B 46 04			    	mov 	eax,[esi+04]
+ 0050  3D 4147564F		    	cmp 	eax,'AGVO'
+ 0055  75 0D			    	jne 	SHORT NoModifyVDDflag
+				    	VMMcall Get_Sys_VM_Handle		; don't ask...   
+ 0057  CD 20                  2		int	Dyna_Link_Int 
+ 0059  00010003               2		dd	Get_Sys_VM_Handle 
+ 005D  80 A3 000002E8 FE	    	and 	byte ptr [ebx+2e8h],0feh 	; alter NoSaveResSysVM flag value
+				
+ 0064				NoModifyVDDflag:    
+ 0064  B0 49				mov 	al,49h 				; raw scan code of main key - hotkey=CTRL-PGUP
+				;    	mov 	al,0fh 				; hotkey = ALT-TAB
+ 0066  B4 01			    	mov 	ah,ExtendedKey_B		; all standard hot key stuff...
+				;	ShiftState macro equates to mov ebx, HKSS_Ctrl
+				    	ShiftState <SS_Toggle_mask+SS_Either_Ctrl>,<SS_Ctrl>
+ 0068  BB FB8B0080            1		mov	ebx, ((NOT SS_Toggle_mask+SS_Either_Ctrl) SHL 16) + SS_Ctrl 
+ 006D  B1 01			    	mov 	cl,CallOnPress			; operation flags
+ 006F  BE 00000040 R		    	mov 	esi,OFFSET32 MT_HotKey_Handler	; callback procedure
+ 0074  33 D2			    	xor 	edx,edx				; reference data
+ 0076  33 FF			    	xor 	edi,edi				; notification delay if cl=PriorityNotify
+				    	VxDcall VKD_Define_Hot_Key
+ 0078  CD 20                  1		int	Dyna_Link_Int 
+ 007A  000D0001               1		dd	VKD_Define_Hot_Key 
+ 007E  72 07			    	jc  	SHORT ExitFailure
+ 0080  A3 00000038 R		    	mov 	ghhkCtrlPgUp,eax		; handle
+ 0085  F8			   	clc
+ 0086  C3			    	ret
+				
+ 0087				ExitFailure:
+ 0087  F9			    	stc
+ 0088  C3			    	ret
+				EndProc MT_Device_Init
+ 0089                         1	MT_Device_Init ENDP 
+				
+				
+				;******************************************************************************
+				;
+				;   VXD_Init_Complete
+				;
+				;   DESCRIPTION:
+				;	Called during the final phase of PM init.
+				;
+				;   ENTRY:
+				;	EBX: Sys VM handle
+				;
+				;
+				;==============================================================================
+				BeginProc VMTD_Init_Complete
+ 0089                         1	VMTD_Init_Complete PROC NEAR 
+ 0089  CD 20                  3		int	Dyna_Link_Int 
+ 008B  000100CB               3		dd	Log_Proc_Call 
+				
+					Trace_Out "VMTD: Init Complete"
+ 0076                         1	_LDATA SEGMENT 
+ 0076  56 4D 54 44 3A 20      1	??0017 db	"VMTD: Init Complete" 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-10
+
+
+ 0089  0D 0A                  1		db	0Dh,0Ah 
+ 008B  00                     1		db	0 
+ 008C                         1	_LDATA ENDS 
+ 008F  9C                     1		pushfd 
+ 0090  60                     1		pushad 
+ 0091  BE 00000076 R          1		mov	esi, OFFSET32 ??0017 
+ 0096  CD 20                  3		int	Dyna_Link_Int 
+ 0098  000100C2               3		dd	Out_Debug_String 
+ 009C  61                     1		popad 
+ 009D  9D                     1		popfd 
+ 009E  F8				clc
+ 009F  C3				ret
+				
+				EndProc VMTD_Init_Complete
+ 00A0                         1	VMTD_Init_Complete ENDP 
+				VxD_ICODE_ENDS
+ 00A0                         1	_ITEXT	ENDS 
+				
+				;******************************************************************************
+				;                       R E A L   M O D E   C O D E
+				;******************************************************************************
+				
+				;******************************************************************************
+				;
+				;       Real mode initialization code
+				;
+				;   DESCRIPTION:
+				;       This code is called when the system is still in real mode, and
+				;       the VxDs are being loaded.
+				;
+				;   ENTRY:
+				;       AX = VMM Version
+				;       BX = Flags
+				;               Bit 0: duplicate device ID already loaded 
+				;               Bit 1: duplicate ID was from the INT 2F device list
+				;               Bit 2: this device is from the INT 2F device list
+				;       EDX = Reference data from INT 2F response, or 0
+				;       SI = Environment segment, passed from MS-DOS
+				;
+				;   EXIT:
+				;       BX = ptr to list of pages to exclude (0, if none)
+				;       SI = ptr to list of instance data items (0, if none)
+				;       EDX = DWORD of reference data to be passed to protect mode init
+				;
+				;==============================================================================
+				VXD_REAL_INIT_SEG
+ 0000                         1	_RCODE SEGMENT 
+				
+ 0000				real_init	proc	near
+ 0000  B4 09			    	mov 	ah,9				; Say hi, just for kicks
+ 0002  BA 0019 R		    	mov 	dx,offset SignOn1
+ 0005  CD 21			    	int 	21h				; OK to use DOS interrupts here
+ 0007  B4 09			    	mov 	ah,9
+ 0009  BA 0035 R		    	mov 	dx,offset SignOn2
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Page     1-11
+
+
+ 000C  CD 21			    	int 	21h
+ 000E  33 DB			    	xor 	bx,bx
+ 0010  33 F6			    	xor 	si,si
+ 0012  66| 33 D2		    	xor 	edx,edx
+ 0015  B8 0000			    	mov 	ax,Device_Load_Ok
+ 0018  C3			    	ret
+				
+ 0019  4A 75 6C 69 65 45	SignOn1	db	"JulieEli VxD version 1.10",0dh,0ah,'$'
+       6C 69 20 56 78 44	
+       20 76 65 72 73 69	
+       6F 6E 20 31 2E 31	
+       30 0D 0A 24		
+ 0035  41 6C 6C 20 72 69	SignOn2	db	"All rights reserved, James Eli 1996",0dh,0ah,'$'
+       67 68 74 73 20 72	
+       65 73 65 72 76 65	
+       64 2C 20 4A 61 6D	
+       65 73 20 45 6C 69	
+       20 31 39 39 36 0D	
+       0A 24			
+				
+ 005B				real_init	endp
+				
+				VXD_REAL_INIT_ENDS
+ 005B                         1	_RCODE ENDS 
+				
+				    END
+
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-1
+
+
+Macros:
+
+		N a m e			Lines
+
+ASSERT_CLIENT_PTR  . . . . . . .  	   6
+ASSERT_CUR_VM_HANDLE . . . . . .  	   6
+ASSERT_INTS_DISABLED . . . . . .  	   8
+ASSERT_INTS_ENABLED  . . . . . .  	   8
+ASSERT_VM_HANDLE . . . . . . . .  	   6
+ASSUMES_FALL_THROUGH . . . . . .  	   6
+BEGINPROC  . . . . . . . . . . .  	  75
+BEGIN_CONTROL_DISPATCH . . . . .  	   3
+BEGIN_SERVICE_TABLE  . . . . . .  	   5
+BEGIN_TOUCH_1ST_MEG  . . . . . .  	   3
+BEGIN_VXD_IO_TABLE . . . . . . .  	  11
+BST2 . . . . . . . . . . . . . .  	  65
+CALLRET  . . . . . . . . . . . .  	  10
+CCALL  . . . . . . . . . . . . .  	   3
+CLEARCPARAMS . . . . . . . . . .  	   7
+CLIENT_PTR_FLAT  . . . . . . . .  	  13
+CONTROL_DISPATCH . . . . . . . .  	  24
+DEBUG_OUT  . . . . . . . . . . .  	   9
+DECLARE_VIRTUAL_DEVICE . . . . .  	  38
+DEV_ID_ERR . . . . . . . . . . .  	   2
+DISPATCH_BYTE_IO . . . . . . . .  	  14
+DUMP_STRUC . . . . . . . . . . .  	  27
+DUMP_STRUC_HEAD  . . . . . . . .  	   3
+DWORD_ALIGN  . . . . . . . . . .  	  20
+EMULATE_NON_BYTE_IO  . . . . . .  	   4
+ENDPROC  . . . . . . . . . . . .  	  10
+END_CONTROL_DISPATCH . . . . . .  	  38
+END_SERVICE_TABLE  . . . . . . .  	   8
+END_TOUCH_1ST_MEG  . . . . . . .  	   3
+END_VXD_IO_TABLE . . . . . . . .  	  10
+FATAL_ERROR  . . . . . . . . . .  	  12
+IO_DELAY . . . . . . . . . . . .  	   1
+MONO_OUT . . . . . . . . . . . .  	  15
+MONO_OUT_AT  . . . . . . . . . .  	  17
+POP_CLIENT_STATE . . . . . . . .  	   5
+PROCESS_PARAM  . . . . . . . . .  	  26
+PUSHCPARAMS  . . . . . . . . . .  	   5
+PUSH_CLIENT_STATE  . . . . . . .  	   5
+QUEUE_OUT  . . . . . . . . . . .  	  29
+SHIFTSTATE . . . . . . . . . . .  	   1
+TRACE_OUT  . . . . . . . . . . .  	  15
+VDD_SERVICE  . . . . . . . . . .  	   0
+VKD_SERVICE  . . . . . . . . . .  	   0
+VMMCALL  . . . . . . . . . . . .  	   2
+VMMJMP . . . . . . . . . . . . .  	   2
+VMM_SERVICE  . . . . . . . . . .  	   0
+VXDCALL  . . . . . . . . . . . .  	   4
+VXDINT . . . . . . . . . . . . .  	   2
+VXDJMP . . . . . . . . . . . . .  	  11
+VXD_ICODE_ENDS . . . . . . . . .  	   2
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-2
+
+
+VXD_ICODE_SEG  . . . . . . . . .  	   3
+VXD_IDATA_ENDS . . . . . . . . .  	   1
+VXD_IDATA_SEG  . . . . . . . . .  	   1
+VXD_IO . . . . . . . . . . . . .  	   2
+VXD_LOCKED_CODE_ENDS . . . . . .  	   2
+VXD_LOCKED_CODE_SEG  . . . . . .  	   3
+VXD_LOCKED_DATA_ENDS . . . . . .  	   1
+VXD_LOCKED_DATA_SEG  . . . . . .  	   4
+VXD_REAL_INIT_ENDS . . . . . . .  	   2
+VXD_REAL_INIT_SEG  . . . . . . .  	   3
+
+Structures and Records:
+
+                N a m e                 Width   # fields
+                                        Shift   Width   Mask    Initial
+
+CLIENT_BYTE_REG_STRUC  . . . . .  	001E	000C
+  CLIENT_BL  . . . . . . . . . .  	0010
+  CLIENT_BH  . . . . . . . . . .  	0011
+  CLIENT_DL  . . . . . . . . . .  	0014
+  CLIENT_DH  . . . . . . . . . .  	0015
+  CLIENT_CL  . . . . . . . . . .  	0018
+  CLIENT_CH  . . . . . . . . . .  	0019
+  CLIENT_AL  . . . . . . . . . .  	001C
+  CLIENT_AH  . . . . . . . . . .  	001D
+CLIENT_REG_STRUC . . . . . . . .  	006C	0027
+  CLIENT_EDI . . . . . . . . . .  	0000
+  CLIENT_ESI . . . . . . . . . .  	0004
+  CLIENT_EBP . . . . . . . . . .  	0008
+  CLIENT_EBX . . . . . . . . . .  	0010
+  CLIENT_EDX . . . . . . . . . .  	0014
+  CLIENT_ECX . . . . . . . . . .  	0018
+  CLIENT_EAX . . . . . . . . . .  	001C
+  CLIENT_ERROR . . . . . . . . .  	0020
+  CLIENT_EIP . . . . . . . . . .  	0024
+  CLIENT_CS  . . . . . . . . . .  	0028
+  CLIENT_EFLAGS  . . . . . . . .  	002C
+  CLIENT_ESP . . . . . . . . . .  	0030
+  CLIENT_SS  . . . . . . . . . .  	0034
+  CLIENT_ES  . . . . . . . . . .  	0038
+  CLIENT_DS  . . . . . . . . . .  	003C
+  CLIENT_FS  . . . . . . . . . .  	0040
+  CLIENT_GS  . . . . . . . . . .  	0044
+  CLIENT_ALT_EIP . . . . . . . .  	0048
+  CLIENT_ALT_CS  . . . . . . . .  	004C
+  CLIENT_ALT_EFLAGS  . . . . . .  	0050
+  CLIENT_ALT_ESP . . . . . . . .  	0054
+  CLIENT_ALT_SS  . . . . . . . .  	0058
+  CLIENT_ALT_ES  . . . . . . . .  	005C
+  CLIENT_ALT_DS  . . . . . . . .  	0060
+  CLIENT_ALT_FS  . . . . . . . .  	0064
+  CLIENT_ALT_GS  . . . . . . . .  	0068
+CLIENT_WORD_REG_STRUC  . . . . .  	0056	001E
+  CLIENT_DI  . . . . . . . . . .  	0000
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-3
+
+
+  CLIENT_SI  . . . . . . . . . .  	0004
+  CLIENT_BP  . . . . . . . . . .  	0008
+  CLIENT_BX  . . . . . . . . . .  	0010
+  CLIENT_DX  . . . . . . . . . .  	0014
+  CLIENT_CX  . . . . . . . . . .  	0018
+  CLIENT_AX  . . . . . . . . . .  	001C
+  CLIENT_IP  . . . . . . . . . .  	0024
+  CLIENT_FLAGS . . . . . . . . .  	002C
+  CLIENT_SP  . . . . . . . . . .  	0030
+  CLIENT_ALT_IP  . . . . . . . .  	0048
+  CLIENT_ALT_FLAGS . . . . . . .  	0050
+  CLIENT_ALT_SP  . . . . . . . .  	0054
+DEMANDINFOSTRUC  . . . . . . . .  	0040	0007
+  DILIN_TOTAL_COUNT  . . . . . .  	0000
+  DIPHYS_COUNT . . . . . . . . .  	0004
+  DIFREE_COUNT . . . . . . . . .  	0008
+  DIUNLOCK_COUNT . . . . . . . .  	000C
+  DILINEAR_BASE_ADDR . . . . . .  	0010
+  DILIN_TOTAL_FREE . . . . . . .  	0014
+  DIRESERVED . . . . . . . . . .  	0018
+EXCEPTION_HANDLER_STRUC  . . . .  	0010	0004
+  EH_RESERVED  . . . . . . . . .  	0000
+  EH_START_EIP . . . . . . . . .  	0004
+  EH_END_EIP . . . . . . . . . .  	0008
+  EH_HANDLER . . . . . . . . . .  	000C
+INSTDATASTRUC  . . . . . . . . .  	0014	0005
+  INSTLINKF  . . . . . . . . . .  	0000
+  INSTLINKB  . . . . . . . . . .  	0004
+  INSTLINADDR  . . . . . . . . .  	0008
+  INSTSIZE . . . . . . . . . . .  	000C
+  INSTTYPE . . . . . . . . . . .  	0010
+IPF_DATA . . . . . . . . . . . .  	0014	0005
+  IPF_LINADDR  . . . . . . . . .  	0000
+  IPF_MAPPAGENUM . . . . . . . .  	0004
+  IPF_PTEENTRY . . . . . . . . .  	0008
+  IPF_FAULTINGVM . . . . . . . .  	000C
+  IPF_FLAGS  . . . . . . . . . .  	0010
+PASTE_REC  . . . . . . . . . . .  	0004	0003
+  PASTE_CHAR . . . . . . . . . .  	0000
+  PASTE_SCANCODE . . . . . . . .  	0001
+  PASTE_SHIFTSTATE . . . . . . .  	0002
+PUSHAD_STRUC . . . . . . . . . .  	0020	0008
+  PUSHAD_EDI . . . . . . . . . .  	0000
+  PUSHAD_ESI . . . . . . . . . .  	0004
+  PUSHAD_EBP . . . . . . . . . .  	0008
+  PUSHAD_ESP . . . . . . . . . .  	000C
+  PUSHAD_EBX . . . . . . . . . .  	0010
+  PUSHAD_EDX . . . . . . . . . .  	0014
+  PUSHAD_ECX . . . . . . . . . .  	0018
+  PUSHAD_EAX . . . . . . . . . .  	001C
+VXD_DESC_BLOCK . . . . . . . . .  	0038	0010
+  DDB_NEXT . . . . . . . . . . .  	0000
+  DDB_SDK_VERSION  . . . . . . .  	0004
+  DDB_REQ_DEVICE_NUMBER  . . . .  	0006
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-4
+
+
+  DDB_DEV_MAJOR_VERSION  . . . .  	0008
+  DDB_DEV_MINOR_VERSION  . . . .  	0009
+  DDB_FLAGS  . . . . . . . . . .  	000A
+  DDB_NAME . . . . . . . . . . .  	000C
+  DDB_INIT_ORDER . . . . . . . .  	0014
+  DDB_CONTROL_PROC . . . . . . .  	0018
+  DDB_V86_API_PROC . . . . . . .  	001C
+  DDB_PM_API_PROC  . . . . . . .  	0020
+  DDB_V86_API_CSIP . . . . . . .  	0024
+  DDB_PM_API_CSIP  . . . . . . .  	0028
+  DDB_REFERENCE_DATA . . . . . .  	002C
+  DDB_SERVICE_TABLE_PTR  . . . .  	0030
+  DDB_SERVICE_TABLE_SIZE . . . .  	0034
+VXD_IOT_HDR  . . . . . . . . . .  	0002	0001
+  VXD_IO_PORTS . . . . . . . . .  	0000
+VXD_IO_STRUC . . . . . . . . . .  	0006	0002
+  VXD_IO_PORT  . . . . . . . . .  	0000
+  VXD_IO_PROC  . . . . . . . . .  	0002
+
+Segments and Groups:
+
+                N a m e         	Size	Length	 Align	Combine Class
+
+FLAT . . . . . . . . . . . . . .  	GROUP
+_IGROUP  . . . . . . . . . . . .  	GROUP
+  _ITEXT . . . . . . . . . . . .  	32 Bit	00A0	DWORD	PUBLIC	'ICODE'
+  _IDATA . . . . . . . . . . . .  	32 Bit	0000	DWORD	PUBLIC	'ICODE'
+_LGROUP  . . . . . . . . . . . .  	GROUP
+  _LTEXT . . . . . . . . . . . .  	32 Bit	00E9	DWORD	PUBLIC	'CODE'
+  _LDATA . . . . . . . . . . . .  	32 Bit	008C	DWORD	PUBLIC	'CODE'
+_PGROUP  . . . . . . . . . . . .  	GROUP
+  _TEXT  . . . . . . . . . . . .  	32 Bit	0000	DWORD	PUBLIC	'PCODE'
+  _DATA  . . . . . . . . . . . .  	32 Bit	0000	DWORD	PUBLIC	'PCODE'
+_RCODE . . . . . . . . . . . . .  	16 Bit	005B	WORD	PUBLIC	'RCODE'
+
+Symbols:            
+
+                N a m e         	Type	 Value	 Attr
+
+ABORT_DEVICE_LOAD  . . . . . . .  	NUMBER	0001	
+ABORT_WIN386_LOAD  . . . . . . .  	NUMBER	0002	
+ADDR_32_IO . . . . . . . . . . .  	NUMBER	0080	
+ADDR_32_IO_BIT . . . . . . . . .  	NUMBER	0007	
+ADJUST_EXECUTION_TIME  . . . . .  	NUMBER	00010037 
+ADJUST_EXEC_PRIORITY . . . . . .  	NUMBER	0001001E 
+AF_BIT . . . . . . . . . . . . .  	NUMBER	0004	
+AF_MASK  . . . . . . . . . . . .  	NUMBER	0010	
+ALDTSPECSEL  . . . . . . . . . .  	NUMBER	0001	
+ALLOCATE_PM_APP_CB_AREA  . . . .  	NUMBER	00010087 
+ALLOCATE_PM_CALL_BACK  . . . . .  	NUMBER	0001000C 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-5
+
+
+ALLOCATE_V86_CALL_BACK . . . . .  	NUMBER	0001000B 
+ALLOWEXTENDED  . . . . . . . . .  	NUMBER	FF00	
+ALLOWEXTENDED_B  . . . . . . . .  	NUMBER	00FF	
+ALWAYS_FIELD . . . . . . . . . .  	NUMBER	0200	
+APM_DEVICE_ID  . . . . . . . . .  	NUMBER	0026	
+APM_INIT_ORDER . . . . . . . . .  	NUMBER	01000000 
+
+BDDEXPLICITDPL . . . . . . . . .  	NUMBER	0001	
+BEGINDOC . . . . . . . . . . . .  	TEXT  		
+BEGINMSG . . . . . . . . . . . .  	TEXT  		
+BEGIN_CRITICAL_SECTION . . . . .  	NUMBER	0001001F 
+BEGIN_MESSAGE_MODE . . . . . . .  	NUMBER	0010	
+BEGIN_NEST_EXEC  . . . . . . . .  	NUMBER	00010083 
+BEGIN_NEST_V86_EXEC  . . . . . .  	NUMBER	00010082 
+BEGIN_PM_APP . . . . . . . . . .  	NUMBER	0015	
+BEGIN_REENTRANT_EXECUTION  . . .  	NUMBER	00010007 
+BEGIN_USE_LOCKED_PM_STACK  . . .  	NUMBER	0001008B 
+BIOSHOOK_DEVICE_ID . . . . . . .  	NUMBER	001F	
+BIOSHOOK_INIT_ORDER  . . . . . .  	NUMBER	06000000 
+BIOSXLAT_DEVICE_ID . . . . . . .  	NUMBER	0013	
+BIOSXLAT_INIT_ORDER  . . . . . .  	NUMBER	50000000 
+BLOCKDEV_DEVICE_ID . . . . . . .  	NUMBER	0010	
+BLOCKDEV_INIT_ORDER  . . . . . .  	NUMBER	40000000 
+BLOCK_ENABLE_INTS  . . . . . . .  	NUMBER	0004	
+BLOCK_ENABLE_INTS_BIT  . . . . .  	NUMBER	0002	
+BLOCK_POLL . . . . . . . . . . .  	NUMBER	0008	
+BLOCK_POLL_BIT . . . . . . . . .  	NUMBER	0003	
+BLOCK_SVC_IF_INTS_LOCKED . . . .  	NUMBER	0002	
+BLOCK_SVC_IF_INTS_LOCKED_BIT . .  	NUMBER	0001	
+BLOCK_SVC_INTS . . . . . . . . .  	NUMBER	0001	
+BLOCK_SVC_INTS_BIT . . . . . . .  	NUMBER	0000	
+BPA_32_BIT . . . . . . . . . . .  	NUMBER	0001	
+BPA_32_BIT_FLAG  . . . . . . . .  	NUMBER	0001	
+BUILD_INT_STACK_FRAME  . . . . .  	NUMBER	0001004C 
+BYTE_INPUT . . . . . . . . . . .  	NUMBER	0000	
+BYTE_OUTPUT  . . . . . . . . . .  	NUMBER	0004	
+
+CALLONALL  . . . . . . . . . . .  	NUMBER	0000	
+CALLONCOMPLETE . . . . . . . . .  	NUMBER	0008	
+CALLONPRESS  . . . . . . . . . .  	NUMBER	0001	
+CALLONRELEASE  . . . . . . . . .  	NUMBER	0002	
+CALLONREPEAT . . . . . . . . . .  	NUMBER	0004	
+CALLONUPDWN  . . . . . . . . . .  	NUMBER	0003	
+CALL_GLOBAL_EVENT  . . . . . . .  	NUMBER	00010010 
+CALL_PRIORITY_VM_EVENT . . . . .  	NUMBER	00010014 
+CALL_VM_EVENT  . . . . . . . . .  	NUMBER	00010011 
+CALL_WHEN_IDLE . . . . . . . . .  	NUMBER	0001003A 
+CALL_WHEN_NOT_CRITICAL . . . . .  	NUMBER	00010024 
+CALL_WHEN_TASK_SWITCHED  . . . .  	NUMBER	0001002A 
+CALL_WHEN_VM_INTS_ENABLED  . . .  	NUMBER	00010019 
+CALL_WHEN_VM_RETURNS . . . . . .  	NUMBER	0001000D 
+CANCEL_GLOBAL_EVENT  . . . . . .  	NUMBER	00010012 
+CANCEL_PRIORITY_VM_EVENT . . . .  	NUMBER	00010015 
+CANCEL_TIME_OUT  . . . . . . . .  	NUMBER	0001003E 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-6
+
+
+CANCEL_VM_EVENT  . . . . . . . .  	NUMBER	00010013 
+CB_CLIENT_POINTER  . . . . . . .  	DWORD	0008	
+CB_HIGH_LINEAR . . . . . . . . .  	DWORD	0004	
+CB_VMID  . . . . . . . . . . . .  	DWORD	000C	
+CB_VM_STATUS . . . . . . . . . .  	DWORD	0000	
+CF_BIT . . . . . . . . . . . . .  	NUMBER	0000	
+CF_MASK  . . . . . . . . . . . .  	NUMBER	0001	
+CLAIM_CRITICAL_SECTION . . . . .  	NUMBER	00010022 
+CLEAR_MONO_SCREEN  . . . . . . .  	NUMBER	000100E2 
+CLOSE_VM . . . . . . . . . . . .  	NUMBER	000100EC 
+CLOSE_VM_NOTIFY  . . . . . . . .  	NUMBER	0019	
+CODE_TYPE  . . . . . . . . . . .  	NUMBER	009A	
+CONVERT_BOOLEAN_STRING . . . . .  	NUMBER	000100B2 
+CONVERT_DECIMAL_STRING . . . . .  	NUMBER	000100AC 
+CONVERT_FIXED_POINT_STRING . . .  	NUMBER	000100AE 
+CONVERT_HEX_STRING . . . . . . .  	NUMBER	000100B0 
+CRASH_CUR_VM . . . . . . . . . .  	NUMBER	0001002F 
+CREATE_SEMAPHORE . . . . . . . .  	NUMBER	00010025 
+CREATE_VM  . . . . . . . . . . .  	NUMBER	0007	
+CRITICAL_SECTION_BOOST . . . . .  	NUMBER	00100000 
+CRIT_REBOOT_NOTIFY . . . . . . .  	NUMBER	0018	
+CUR_RUN_VM_BOOST . . . . . . . .  	NUMBER	0004	
+CVF_CONTINUE_EXEC  . . . . . . .  	NUMBER	0001	
+CVF_CONTINUE_EXEC_BIT  . . . . .  	NUMBER	0000	
+CVNF_CRIT_CLOSE  . . . . . . . .  	NUMBER	0001	
+CVNF_CRIT_CLOSE_BIT  . . . . . .  	NUMBER	0000	
+
+DB_BIT . . . . . . . . . . . . .  	NUMBER	000A	
+DDB_DEVICE_INIT_DONE . . . . . .  	NUMBER	0002	
+DDB_DEVICE_INIT_DONE_BIT . . . .  	NUMBER	0001	
+DDB_SYS_CRIT_INIT_DONE . . . . .  	NUMBER	0001	
+DDB_SYS_CRIT_INIT_DONE_BIT . . .  	NUMBER	0000	
+DDK_VERSION  . . . . . . . . . .  	NUMBER	030A	
+DEBFAR . . . . . . . . . . . . .  	TEXT  NEAR PTR		
+DEBUG  . . . . . . . . . . . . .  	TEXT  		
+DEBUG_CONVERT_HEX_BINARY . . . .  	NUMBER	000100C5 
+DEBUG_CONVERT_HEX_DECIMAL  . . .  	NUMBER	000100C6 
+DEBUG_DEVICE_ID  . . . . . . . .  	NUMBER	0002	
+DEBUG_INIT_ORDER . . . . . . . .  	NUMBER	04000000 
+DEBUG_QUERY  . . . . . . . . . .  	NUMBER	0014	
+DEBUG_TEST_CUR_VM  . . . . . . .  	NUMBER	000100CC 
+DEBUG_TEST_VALID_HANDLE  . . . .  	NUMBER	000100C7 
+DESTROY_SEMAPHORE  . . . . . . .  	NUMBER	00010026 
+DESTROY_VM . . . . . . . . . . .  	NUMBER	000C	
+DEVICE_INIT  . . . . . . . . . .  	NUMBER	0001	
+DEVICE_LOAD_OK . . . . . . . . .  	NUMBER	0000	
+DEVICE_REBOOT_NOTIFY . . . . . .  	NUMBER	0017	
+DF_MASK  . . . . . . . . . . . .  	NUMBER	0400	
+DISABLE_GLOBAL_TRAPPING  . . . .  	NUMBER	00010099 
+DISABLE_LOCAL_TRAPPING . . . . .  	NUMBER	0001009A 
+DISABLE_TOUCH_1ST_MEG  . . . . .  	NUMBER	000100EE 
+DISABLE_VM_INTS  . . . . . . . .  	NUMBER	0001001B 
+DL_JMP_BIT . . . . . . . . . . .  	NUMBER	000F	
+DL_JMP_MASK  . . . . . . . . . .  	NUMBER	8000	
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-7
+
+
+DOSMGR_DEVICE_ID . . . . . . . .  	NUMBER	0015	
+DOSMGR_INIT_ORDER  . . . . . . .  	NUMBER	58000000 
+DOSNET_DEVICE_ID . . . . . . . .  	NUMBER	001A	
+DOSNET_INIT_ORDER  . . . . . . .  	NUMBER	5C000000 
+DUPLICATE_DEVICE_ID  . . . . . .  	NUMBER	0001	
+DUPLICATE_DEVICE_ID_BIT  . . . .  	NUMBER	0000	
+DUPLICATE_FROM_INT2F . . . . . .  	NUMBER	0002	
+DUPLICATE_FROM_INT2F_BIT . . . .  	NUMBER	0001	
+DWORD_INPUT  . . . . . . . . . .  	NUMBER	0010	
+DWORD_IO . . . . . . . . . . . .  	NUMBER	0010	
+DWORD_IO_BIT . . . . . . . . . .  	NUMBER	0004	
+DWORD_OUTPUT . . . . . . . . . .  	NUMBER	0014	
+DYNA_LINK_INT  . . . . . . . . .  	NUMBER	0020	
+D_ACCESSED . . . . . . . . . . .  	NUMBER	0001	
+D_CODE . . . . . . . . . . . . .  	NUMBER	0008	
+D_CTRL . . . . . . . . . . . . .  	NUMBER	0000	
+D_DATA . . . . . . . . . . . . .  	NUMBER	0000	
+D_DEF16  . . . . . . . . . . . .  	NUMBER	0000	
+D_DEF32  . . . . . . . . . . . .  	NUMBER	0040	
+D_DPL0 . . . . . . . . . . . . .  	NUMBER	0000	
+D_DPL1 . . . . . . . . . . . . .  	NUMBER	0020	
+D_DPL2 . . . . . . . . . . . . .  	NUMBER	0040	
+D_DPL3 . . . . . . . . . . . . .  	NUMBER	0060	
+D_GRAN_BYTE  . . . . . . . . . .  	NUMBER	0000	
+D_GRAN_PAGE  . . . . . . . . . .  	NUMBER	0080	
+D_NOTPRES  . . . . . . . . . . .  	NUMBER	0000	
+D_PAGE32 . . . . . . . . . . . .  	NUMBER	00C0	
+D_PRES . . . . . . . . . . . . .  	NUMBER	0080	
+D_R  . . . . . . . . . . . . . .  	NUMBER	0000	
+D_RX . . . . . . . . . . . . . .  	NUMBER	0002	
+D_SEG  . . . . . . . . . . . . .  	NUMBER	0010	
+D_W  . . . . . . . . . . . . . .  	NUMBER	0002	
+D_X  . . . . . . . . . . . . . .  	NUMBER	0000	
+
+EBIOS_DEVICE_ID  . . . . . . . .  	NUMBER	0012	
+EBIOS_INIT_ORDER . . . . . . . .  	NUMBER	26000000 
+EF_HANG_ON_EXIT  . . . . . . . .  	NUMBER	0001	
+EM_BIT . . . . . . . . . . . . .  	NUMBER	0002	
+EM_MASK  . . . . . . . . . . . .  	NUMBER	0004	
+ENABLE_GLOBAL_TRAPPING . . . . .  	NUMBER	00010097 
+ENABLE_LOCAL_TRAPPING  . . . . .  	NUMBER	00010098 
+ENABLE_TOUCH_1ST_MEG . . . . . .  	NUMBER	000100ED 
+ENABLE_VM_INTS . . . . . . . . .  	NUMBER	0001001A 
+ENDDOC . . . . . . . . . . . . .  	TEXT  		
+ENDMSG . . . . . . . . . . . . .  	TEXT  		
+END_CRITICAL_SECTION . . . . . .  	NUMBER	00010020 
+END_CRIT_AND_SUSPEND . . . . . .  	NUMBER	00010021 
+END_MESSAGE_MODE . . . . . . . .  	NUMBER	0011	
+END_NEST_EXEC  . . . . . . . . .  	NUMBER	00010086 
+END_PM_APP . . . . . . . . . . .  	NUMBER	0016	
+END_REENTRANT_EXECUTION  . . . .  	NUMBER	00010008 
+END_USE_LOCKED_PM_STACK  . . . .  	NUMBER	0001008C 
+ET_BIT . . . . . . . . . . . . .  	NUMBER	0004	
+ET_MASK  . . . . . . . . . . . .  	NUMBER	0010	
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-8
+
+
+EXEC_INT . . . . . . . . . . . .  	NUMBER	00010084 
+EXEC_VXD_INT . . . . . . . . . .  	NUMBER	0001008F 
+EXITFAILURE  . . . . . . . . . .  	L NEAR	0087	_ITEXT
+EXTENDEDKEY  . . . . . . . . . .  	NUMBER	0100	
+EXTENDEDKEY_B  . . . . . . . . .  	NUMBER	0001	
+
+FALSE  . . . . . . . . . . . . .  	NUMBER	0000	
+FATAL_ERROR_HANDLER  . . . . . .  	NUMBER	000100BE 
+FATAL_MEMORY_ERROR . . . . . . .  	NUMBER	000100BF 
+FKSS_ALT_DOWN  . . . . . . . . .  	NUMBER	0008	
+FKSS_CAPLCK_DOWN . . . . . . . .  	NUMBER	4000	
+FKSS_CAPLCK_ON . . . . . . . . .  	NUMBER	0040	
+FKSS_CTRL_DOWN . . . . . . . . .  	NUMBER	0004	
+FKSS_INSERT_DOWN . . . . . . . .  	NUMBER	8000	
+FKSS_INSERT_ON . . . . . . . . .  	NUMBER	0080	
+FKSS_NUMLCK_DOWN . . . . . . . .  	NUMBER	2000	
+FKSS_NUMLCK_ON . . . . . . . . .  	NUMBER	0020	
+FKSS_SCRLCK_DOWN . . . . . . . .  	NUMBER	1000	
+FKSS_SCRLCK_ON . . . . . . . . .  	NUMBER	0010	
+FKSS_SHIFT_DOWN  . . . . . . . .  	NUMBER	0002	
+FVIDHGHRSGRFXMD  . . . . . . . .  	NUMBER	0040	
+FVIDLOWRSGRFXMD  . . . . . . . .  	NUMBER	0020	
+FVIDNOTRPHRGRFX  . . . . . . . .  	NUMBER	0008	
+FVIDNOTRPLRGRFX  . . . . . . . .  	NUMBER	0004	
+FVIDNOTRPTXT . . . . . . . . . .  	NUMBER	0002	
+FVIDRETAINALLO . . . . . . . . .  	NUMBER	0080	
+FVIDTEXTMD . . . . . . . . . . .  	NUMBER	0010	
+FVIDTXTEMULATE . . . . . . . . .  	NUMBER	0001	
+
+GETDOSVECTORS  . . . . . . . . .  	NUMBER	000100BA 
+GETSETDETAILEDVMERROR  . . . . .  	NUMBER	000100E0 
+GETSET_HMA_INFO  . . . . . . . .  	NUMBER	000100BC 
+GET_CONFIG_DIRECTORY . . . . . .  	NUMBER	000100B7 
+GET_CRIT_SECTION_STATUS  . . . .  	NUMBER	00010029 
+GET_CRIT_STATUS_NO_BLOCK . . . .  	NUMBER	000100F1 
+GET_CUR_PM_APP_CB  . . . . . . .  	NUMBER	00010088 
+GET_CUR_VM_HANDLE  . . . . . . .  	NUMBER	00010001 
+GET_DEBUG_OPTIONS  . . . . . . .  	NUMBER	000100DC 
+GET_ENVIRONMENT_STRING . . . . .  	NUMBER	000100B5 
+GET_EXECUTION_FOCUS  . . . . . .  	NUMBER	00010030 
+GET_EXEC_PATH  . . . . . . . . .  	NUMBER	000100B6 
+GET_FAULT_HOOK_ADDRS . . . . . .  	NUMBER	0001007E 
+GET_LAST_UPDATED_SYSTEM_TIME . .  	NUMBER	000100CF 
+GET_LAST_UPDATED_VM_EXEC_TIME  .  	NUMBER	000100D0 
+GET_MACHINE_INFO . . . . . . . .  	NUMBER	000100BB 
+GET_MONO_CHR . . . . . . . . . .  	NUMBER	000100E7 
+GET_MONO_CUR_POS . . . . . . . .  	NUMBER	000100E6 
+GET_NAME_OF_UGLY_TSR . . . . . .  	NUMBER	000100DB 
+GET_NEXT_ARENA . . . . . . . . .  	NUMBER	000100DA 
+GET_NEXT_PROFILE_STRING  . . . .  	NUMBER	000100B4 
+GET_NEXT_VM_HANDLE . . . . . . .  	NUMBER	0001003B 
+GET_NMI_HANDLER_ADDR . . . . . .  	NUMBER	00010016 
+GET_PM_INT_TYPE  . . . . . . . .  	NUMBER	000100CD 
+GET_PM_INT_VECTOR  . . . . . . .  	NUMBER	00010044 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-9
+
+
+GET_PROFILE_BOOLEAN  . . . . . .  	NUMBER	000100B1 
+GET_PROFILE_DECIMAL_INT  . . . .  	NUMBER	000100AB 
+GET_PROFILE_FIXED_POINT  . . . .  	NUMBER	000100AD 
+GET_PROFILE_HEX_INT  . . . . . .  	NUMBER	000100AF 
+GET_PROFILE_STRING . . . . . . .  	NUMBER	000100B3 
+GET_PSP_SEGMENT  . . . . . . . .  	NUMBER	000100B9 
+GET_SYSTEM_TIME  . . . . . . . .  	NUMBER	0001003F 
+GET_SYS_VM_HANDLE  . . . . . . .  	NUMBER	00010003 
+GET_TIME_SLICE_GRANULARITY . . .  	NUMBER	00010034 
+GET_TIME_SLICE_INFO  . . . . . .  	NUMBER	00010036 
+GET_TIME_SLICE_PRIORITY  . . . .  	NUMBER	00010032 
+GET_V86_INT_VECTOR . . . . . . .  	NUMBER	00010042 
+GET_VMM_REENTER_COUNT  . . . . .  	NUMBER	00010006 
+GET_VMM_VERSION  . . . . . . . .  	NUMBER	00010000 
+GET_VM_EXEC_TIME . . . . . . . .  	NUMBER	00010040 
+GHHKCTRLPGUP . . . . . . . . . .  	L DWORD	0038	_LDATA
+GMIF_80486 . . . . . . . . . . .  	NUMBER	00010000 
+GMIF_80486_BIT . . . . . . . . .  	NUMBER	0010	
+GMIF_EISA  . . . . . . . . . . .  	NUMBER	00080000 
+GMIF_EISA_BIT  . . . . . . . . .  	NUMBER	0013	
+GMIF_MCA . . . . . . . . . . . .  	NUMBER	00040000 
+GMIF_MCA_BIT . . . . . . . . . .  	NUMBER	0012	
+GMIF_PCXT  . . . . . . . . . . .  	NUMBER	00020000 
+GMIF_PCXT_BIT  . . . . . . . . .  	NUMBER	0011	
+GNA_HIDOSLINKED  . . . . . . . .  	NUMBER	0002	
+GNA_ISHIGHDOS  . . . . . . . . .  	NUMBER	0004	
+GSDVME_CRTNOMSG  . . . . . . . .  	NUMBER	00020009 
+GSDVME_DEVNUKE . . . . . . . . .  	NUMBER	00010007 
+GSDVME_DEVNUKEHDWR . . . . . . .  	NUMBER	00010008 
+GSDVME_INSMEMDEV . . . . . . . .  	NUMBER	00020008 
+GSDVME_INSMEMEMS . . . . . . . .  	NUMBER	00020004 
+GSDVME_INSMEMV86 . . . . . . . .  	NUMBER	00020001 
+GSDVME_INSMEMV86HI . . . . . . .  	NUMBER	00020005 
+GSDVME_INSMEMVID . . . . . . . .  	NUMBER	00020006 
+GSDVME_INSMEMVM  . . . . . . . .  	NUMBER	00020007 
+GSDVME_INSMEMXMS . . . . . . . .  	NUMBER	00020003 
+GSDVME_INSV86SPACE . . . . . . .  	NUMBER	00020002 
+GSDVME_INVALFLT  . . . . . . . .  	NUMBER	00010005 
+GSDVME_INVALGPFLT  . . . . . . .  	NUMBER	00010004 
+GSDVME_INVALINST . . . . . . . .  	NUMBER	00010002 
+GSDVME_INVALPGFLT  . . . . . . .  	NUMBER	00010003 
+GSDVME_NUKENOMSG . . . . . . . .  	NUMBER	00010009 
+GSDVME_OKNUKEMASK  . . . . . . .  	NUMBER	80000000 
+GSDVME_PRIVINST  . . . . . . . .  	NUMBER	00010001 
+GSDVME_USERNUKE  . . . . . . . .  	NUMBER	00010006 
+GSPOC_F_GET  . . . . . . . . . .  	NUMBER	0001	
+GVDADWORDALIGN . . . . . . . . .  	NUMBER	0002	
+GVDAHIGHSYSCRITOK  . . . . . . .  	NUMBER	1000	
+GVDAINQUIRE  . . . . . . . . . .  	NUMBER	0800	
+GVDAINSTANCE . . . . . . . . . .  	NUMBER	0100	
+GVDAPAGEALIGN  . . . . . . . . .  	NUMBER	0008	
+GVDAPARAALIGN  . . . . . . . . .  	NUMBER	0004	
+GVDARECLAIM  . . . . . . . . . .  	NUMBER	0400	
+GVDAWORDALIGN  . . . . . . . . .  	NUMBER	0001	
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-10
+
+
+GVDAZEROINIT . . . . . . . . . .  	NUMBER	0200	
+
+HEAPNOCOPY . . . . . . . . . . .  	NUMBER	0004	
+HEAPZEROINIT . . . . . . . . . .  	NUMBER	0001	
+HEAPZEROREINIT . . . . . . . . .  	NUMBER	0002	
+HIGH_PRI_DEVICE_BOOST  . . . . .  	NUMBER	1000	
+HKSS_ALT . . . . . . . . . . . .  	NUMBER	F7870100 
+HKSS_CTRL  . . . . . . . . . . .  	NUMBER	FB8B0080 
+HKSS_SHIFT . . . . . . . . . . .  	NUMBER	FD8D0001 
+HOOK_DEVICE_PM_API . . . . . . .  	NUMBER	00010092 
+HOOK_DEVICE_SERVICE  . . . . . .  	NUMBER	00010090 
+HOOK_DEVICE_V86_API  . . . . . .  	NUMBER	00010091 
+HOOK_INVALID_PAGE_FAULT  . . . .  	NUMBER	000100E9 
+HOOK_NMI_EVENT . . . . . . . . .  	NUMBER	00010018 
+HOOK_PM_FAULT  . . . . . . . . .  	NUMBER	00010080 
+HOOK_V86_FAULT . . . . . . . . .  	NUMBER	0001007F 
+HOOK_V86_INT_CHAIN . . . . . . .  	NUMBER	00010041 
+HOOK_V86_PAGE  . . . . . . . . .  	NUMBER	00010071 
+HOOK_VMM_FAULT . . . . . . . . .  	NUMBER	00010081 
+HOT_KEY_COMPLETED  . . . . . . .  	NUMBER	0003	
+HOT_KEY_PRESSED  . . . . . . . .  	NUMBER	0000	
+HOT_KEY_RELEASED . . . . . . . .  	NUMBER	0001	
+HOT_KEY_REPEATED . . . . . . . .  	NUMBER	0002	
+HOT_KEY_SYSVM_NOTIFY . . . . . .  	NUMBER	0080	
+HOT_KEY_SYSVM_NOTIFY_BIT . . . .  	NUMBER	0007	
+
+IF_BIT . . . . . . . . . . . . .  	NUMBER	0009	
+IF_MASK  . . . . . . . . . . . .  	NUMBER	0200	
+INDOS_FIELD  . . . . . . . . . .  	NUMBER	0100	
+INIT_COMPLETE  . . . . . . . . .  	NUMBER	0002	
+INSTALL_EXCEPTION_HANDLER  . . .  	NUMBER	000100EF 
+INSTALL_IO_HANDLER . . . . . . .  	NUMBER	00010096 
+INSTALL_MULT_IO_HANDLERS . . . .  	NUMBER	00010095 
+INSTALL_V86_BREAK_POINT  . . . .  	NUMBER	00010009 
+INT13_DEVICE_ID  . . . . . . . .  	NUMBER	0020	
+INT13_INIT_ORDER . . . . . . . .  	NUMBER	42000000 
+IN_DEBUG_CHR . . . . . . . . . .  	NUMBER	000100C4 
+IOPL_BIT0  . . . . . . . . . . .  	NUMBER	000C	
+IOPL_BIT1  . . . . . . . . . . .  	NUMBER	000D	
+IOPL_MASK  . . . . . . . . . . .  	NUMBER	3000	
+IO_SEG_MASK  . . . . . . . . . .  	NUMBER	FFFF0000 
+IO_SEG_SHIFT . . . . . . . . . .  	NUMBER	0010	
+IPF_INVTYP . . . . . . . . . . .  	NUMBER	0008	
+IPF_PGDIR  . . . . . . . . . . .  	NUMBER	0001	
+IPF_PGERR  . . . . . . . . . . .  	NUMBER	0010	
+IPF_PM . . . . . . . . . . . . .  	NUMBER	0080	
+IPF_REFLT  . . . . . . . . . . .  	NUMBER	0020	
+IPF_V86  . . . . . . . . . . . .  	NUMBER	0100	
+IPF_V86PG  . . . . . . . . . . .  	NUMBER	0002	
+IPF_V86PGH . . . . . . . . . . .  	NUMBER	0004	
+IPF_VMM  . . . . . . . . . . . .  	NUMBER	0040	
+IS_DEBUG_CHR . . . . . . . . . .  	NUMBER	000100E1 
+
+JulieEli_DDB . . . . . . . . . .  	L 	0000	_LDATA	Global
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-11
+
+
+
+LED_CPLOK  . . . . . . . . . . .  	NUMBER	0004	
+LED_NMLOK  . . . . . . . . . . .  	NUMBER	0002	
+LED_SCLOK  . . . . . . . . . . .  	NUMBER	0001	
+LF_ALLOC_ERROR . . . . . . . . .  	NUMBER	0004	
+LF_ALLOC_ERROR_BIT . . . . . . .  	NUMBER	0002	
+LF_ASYNC . . . . . . . . . . . .  	NUMBER	0001	
+LF_ASYNC_BIT . . . . . . . . . .  	NUMBER	0000	
+LF_USE_HEAP  . . . . . . . . . .  	NUMBER	0002	
+LF_USE_HEAP_BIT  . . . . . . . .  	NUMBER	0001	
+LIST_ALLOCATE  . . . . . . . . .  	NUMBER	0001009D 
+LIST_ATTACH  . . . . . . . . . .  	NUMBER	0001009E 
+LIST_ATTACH_TAIL . . . . . . . .  	NUMBER	0001009F 
+LIST_CREATE  . . . . . . . . . .  	NUMBER	0001009B 
+LIST_DEALLOCATE  . . . . . . . .  	NUMBER	000100A2 
+LIST_DESTROY . . . . . . . . . .  	NUMBER	0001009C 
+LIST_GET_FIRST . . . . . . . . .  	NUMBER	000100A3 
+LIST_GET_NEXT  . . . . . . . . .  	NUMBER	000100A4 
+LIST_INSERT  . . . . . . . . . .  	NUMBER	000100A0 
+LIST_REMOVE  . . . . . . . . . .  	NUMBER	000100A1 
+LIST_REMOVE_FIRST  . . . . . . .  	NUMBER	000100A5 
+LOADING_FROM_INT2F . . . . . . .  	NUMBER	0004	
+LOADING_FROM_INT2F_BIT . . . . .  	NUMBER	0002	
+LOCAL_KEY  . . . . . . . . . . .  	NUMBER	0080	
+LOCATE_BYTE_IN_ROM . . . . . . .  	NUMBER	000100E8 
+LOG_PROC_CALL  . . . . . . . . .  	NUMBER	000100CB 
+LOOPD  . . . . . . . . . . . . .  	TEXT  loop		
+LOOPDE . . . . . . . . . . . . .  	TEXT  loope		
+LOOPDNE  . . . . . . . . . . . .  	TEXT  loopne		
+LOOPDNZ  . . . . . . . . . . . .  	TEXT  loopnz		
+LOOPDZ . . . . . . . . . . . . .  	TEXT  loopz		
+LOW_PRI_DEVICE_BOOST . . . . . .  	NUMBER	0010	
+
+MAJOR_VERSION  . . . . . . . . .  	NUMBER	0001	
+MAP_FLAT . . . . . . . . . . . .  	NUMBER	0001001C 
+MAP_LIN_TO_VM_ADDR . . . . . . .  	NUMBER	0001001D 
+MAX_MT_PM_SERVICE  . . . . . . .  	NUMBER	0002	
+MCA_POS_DEVICE_ID  . . . . . . .  	NUMBER	0023	
+MCA_POS_INIT_ORDER . . . . . . .  	NUMBER	41000000 
+MINOR_VERSION  . . . . . . . . .  	NUMBER	0001	
+MK_ALT . . . . . . . . . . . . .  	NUMBER	0008	
+MK_CTRL  . . . . . . . . . . . .  	NUMBER	0004	
+MK_EXTENDED  . . . . . . . . . .  	NUMBER	0080	
+MK_SHIFT . . . . . . . . . . . .  	NUMBER	0002	
+MMGRHMADISABLE . . . . . . . . .  	NUMBER	0004	
+MMGRHMAENABLE  . . . . . . . . .  	NUMBER	0002	
+MMGRHMAPHYSICAL  . . . . . . . .  	NUMBER	0001	
+MMGRHMAQUERY . . . . . . . . . .  	NUMBER	0008	
+MMGR_SETNULPAGEADDR  . . . . . .  	NUMBER	00010075 
+MP_BIT . . . . . . . . . . . . .  	NUMBER	0001	
+MP_MASK  . . . . . . . . . . . .  	NUMBER	0002	
+MT_Control_Proc  . . . . . . . .  	N PROC	00C3	_LTEXT	Global	Length = 0026
+MT_DEVICE_ID . . . . . . . . . .  	NUMBER	3C8D	
+MT_Device_Init . . . . . . . . .  	N PROC	0017	_ITEXT	Global	Length = 0072
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-12
+
+
+MT_Get_Version . . . . . . . . .  	N PROC	0027	_LTEXT	Global	Length = 0019
+MT_HotKey_Handler  . . . . . . .  	N PROC	0040	_LTEXT	Global	Length = 0083
+MT_PM_API_Proc . . . . . . . . .  	N PROC	0000	_LTEXT	Global	Length = 0027
+MT_PM_CALL_TABLE . . . . . . . .  	L DWORD	003C	_LDATA
+MT_Sys_Critical_Init . . . . . .  	N PROC	0000	_ITEXT	Global	Length = 0017
+
+NOMODIFYVDDFLAG  . . . . . . . .  	L NEAR	0064	_ITEXT
+NO_FAIL_MESSAGE  . . . . . . . .  	NUMBER	8000	
+NO_FAIL_MESSAGE_BIT  . . . . . .  	NUMBER	000F	
+NO_FAIL_RESUME_VM  . . . . . . .  	NUMBER	0001002D 
+NT_BIT . . . . . . . . . . . . .  	NUMBER	000E	
+NT_MASK  . . . . . . . . . . . .  	NUMBER	4000	
+NUKE_VM  . . . . . . . . . . . .  	NUMBER	0001002E 
+NUM_VDD_SERVICES . . . . . . . .  	NUMBER	000E	
+NUM_VKD_SERVICES . . . . . . . .  	NUMBER	000F	
+NUM_VMM_SERVICES . . . . . . . .  	NUMBER	00F2	
+
+OFFSET32 . . . . . . . . . . . .  	TEXT  OFFSET FLAT:		
+OF_BIT . . . . . . . . . . . . .  	NUMBER	000B	
+OF_MASK  . . . . . . . . . . . .  	NUMBER	0800	
+OPENFILE . . . . . . . . . . . .  	NUMBER	000100B8 
+OUTPUT . . . . . . . . . . . . .  	NUMBER	0004	
+OUTPUT_BIT . . . . . . . . . . .  	NUMBER	0002	
+OUT_DEBUG_CHR  . . . . . . . . .  	NUMBER	000100C3 
+OUT_DEBUG_STRING . . . . . . . .  	NUMBER	000100C2 
+OUT_MONO_CHR . . . . . . . . . .  	NUMBER	000100E3 
+OUT_MONO_STRING  . . . . . . . .  	NUMBER	000100E4 
+
+PAGECLEARV86INTSLOCKED . . . . .  	NUMBER	1000	
+PAGECLEARV86PAGEABLE . . . . . .  	NUMBER	0400	
+PAGECONTIG . . . . . . . . . . .  	NUMBER	0004	
+PAGEDEBUGNULFAULT  . . . . . . .  	NUMBER	0010	
+PAGEDISCARD  . . . . . . . . . .  	NUMBER	00010000 
+PAGEFILE_DEVICE_ID . . . . . . .  	NUMBER	0021	
+PAGEFILE_INIT_ORDER  . . . . . .  	NUMBER	18000000 
+PAGEFIXED  . . . . . . . . . . .  	NUMBER	0008	
+PAGELOCKED . . . . . . . . . . .  	NUMBER	0080	
+PAGELOCKEDIFDP . . . . . . . . .  	NUMBER	0100	
+PAGEMAPFREEPHYSREG . . . . . . .  	NUMBER	00040000 
+PAGEMARKPAGEOUT  . . . . . . . .  	NUMBER	2000	
+PAGENOCOPY . . . . . . . . . . .  	NUMBER	0040	
+PAGEPDPCLEARBASE . . . . . . . .  	NUMBER	8000	
+PAGEPDPQUERYDIRTY  . . . . . . .  	NUMBER	00020000 
+PAGEPDPSETBASE . . . . . . . . .  	NUMBER	4000	
+PAGESETV86INTSLOCKED . . . . . .  	NUMBER	0800	
+PAGESETV86PAGEABLE . . . . . . .  	NUMBER	0200	
+PAGESWAP_DEVICE_ID . . . . . . .  	NUMBER	0007	
+PAGESWAP_INIT_ORDER  . . . . . .  	NUMBER	1C000000 
+PAGEUSEALIGN . . . . . . . . . .  	NUMBER	0002	
+PAGEZEROINIT . . . . . . . . . .  	NUMBER	0001	
+PAGEZEROREINIT . . . . . . . . .  	NUMBER	0020	
+PARITY_DEVICE_ID . . . . . . . .  	NUMBER	0008	
+PARITY_INIT_ORDER  . . . . . . .  	NUMBER	20000000 
+PASTE_ABORTED  . . . . . . . . .  	NUMBER	0001	
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-13
+
+
+PASTE_COMPLETE . . . . . . . . .  	NUMBER	0000	
+PASTE_KEY  . . . . . . . . . . .  	WORD	0000	
+PASTE_VM_TERM  . . . . . . . . .  	NUMBER	0002	
+PCLIENT_DS . . . . . . . . . . .  	WORD	-0004	
+PCLIENT_ES . . . . . . . . . . .  	WORD	-0008	
+PCLIENT_FS . . . . . . . . . . .  	WORD	-000C	
+PCLIENT_GS . . . . . . . . . . .  	WORD	-0010	
+PEF_ALWAYS_SCHED . . . . . . . .  	NUMBER	0008	
+PEF_ALWAYS_SCHED_BIT . . . . . .  	NUMBER	0003	
+PEF_DONT_UNBOOST . . . . . . . .  	NUMBER	0004	
+PEF_DONT_UNBOOST_BIT . . . . . .  	NUMBER	0002	
+PEF_TIME_OUT . . . . . . . . . .  	NUMBER	0010	
+PEF_TIME_OUT_BIT . . . . . . . .  	NUMBER	0004	
+PEF_WAIT_FOR_STI . . . . . . . .  	NUMBER	0001	
+PEF_WAIT_FOR_STI_BIT . . . . . .  	NUMBER	0000	
+PEF_WAIT_NOT_CRIT  . . . . . . .  	NUMBER	0002	
+PEF_WAIT_NOT_CRIT_BIT  . . . . .  	NUMBER	0001	
+PE_BIT . . . . . . . . . . . . .  	NUMBER	0000	
+PE_MASK  . . . . . . . . . . . .  	NUMBER	0001	
+PF_BIT . . . . . . . . . . . . .  	NUMBER	0002	
+PF_MASK  . . . . . . . . . . . .  	NUMBER	0004	
+PGT_HOOKED . . . . . . . . . . .  	NUMBER	0E00	
+PGT_INSTANCE . . . . . . . . . .  	NUMBER	0C00	
+PGT_PRIVATE  . . . . . . . . . .  	NUMBER	0600	
+PGT_RELOCK . . . . . . . . . . .  	NUMBER	0A00	
+PGT_RESERVED1  . . . . . . . . .  	NUMBER	0400	
+PGT_RESERVED2  . . . . . . . . .  	NUMBER	0800	
+PGT_SYS  . . . . . . . . . . . .  	NUMBER	0200	
+PGT_VM . . . . . . . . . . . . .  	NUMBER	0000	
+PG_BIT . . . . . . . . . . . . .  	NUMBER	001F	
+PG_HOOKED  . . . . . . . . . . .  	NUMBER	0007	
+PG_IGNORE  . . . . . . . . . . .  	NUMBER	FFFFFFFF 
+PG_INSTANCE  . . . . . . . . . .  	NUMBER	0006	
+PG_MASK  . . . . . . . . . . . .  	NUMBER	80000000 
+PG_PRIVATE . . . . . . . . . . .  	NUMBER	0003	
+PG_RELOCK  . . . . . . . . . . .  	NUMBER	0005	
+PG_RESERVED1 . . . . . . . . . .  	NUMBER	0002	
+PG_RESERVED2 . . . . . . . . . .  	NUMBER	0004	
+PG_SYS . . . . . . . . . . . . .  	NUMBER	0001	
+PG_TYPE  . . . . . . . . . . . .  	NUMBER	0E00	
+PG_VM  . . . . . . . . . . . . .  	NUMBER	0000	
+PMCALLBAD  . . . . . . . . . . .  	L NEAR	001B	_LTEXT
+PMCB_FLAGS . . . . . . . . . . .  	DWORD	0000	
+PMCB_PARENT  . . . . . . . . . .  	DWORD	0004	
+POWER_EVENT  . . . . . . . . . .  	NUMBER	001A	
+PRIORITYNOTIFY . . . . . . . . .  	NUMBER	0010	
+P_ACC  . . . . . . . . . . . . .  	NUMBER	0020	
+P_ACCBIT . . . . . . . . . . . .  	NUMBER	0005	
+P_AVAIL  . . . . . . . . . . . .  	NUMBER	0007	
+P_DIRTY  . . . . . . . . . . . .  	NUMBER	0040	
+P_DIRTYBIT . . . . . . . . . . .  	NUMBER	0006	
+P_PRES . . . . . . . . . . . . .  	NUMBER	0001	
+P_PRESBIT  . . . . . . . . . . .  	NUMBER	0000	
+P_SIZE . . . . . . . . . . . . .  	NUMBER	1000	
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-14
+
+
+P_USER . . . . . . . . . . . . .  	NUMBER	0004	
+P_USERBIT  . . . . . . . . . . .  	NUMBER	0002	
+P_WRITE  . . . . . . . . . . . .  	NUMBER	0002	
+P_WRITEBIT . . . . . . . . . . .  	NUMBER	0001	
+
+QUERY_DESTROY  . . . . . . . . .  	NUMBER	0013	
+QUEUE_DEBUG_STRING . . . . . . .  	NUMBER	000100CA 
+
+REAL_INIT  . . . . . . . . . . .  	N PROC	0000	_RCODE	Length = 005B
+REBOOT_DEVICE_ID . . . . . . . .  	NUMBER	0009	
+REBOOT_INIT_ORDER  . . . . . . .  	NUMBER	24000000 
+REBOOT_PROCESSOR . . . . . . . .  	NUMBER	0012	
+RELEASE_CRITICAL_SECTION . . . .  	NUMBER	00010023 
+RELEASE_TIME_SLICE . . . . . . .  	NUMBER	00010038 
+REMOVE_EXCEPTION_HANDLER . . . .  	NUMBER	000100F0 
+REMOVE_V86_BREAK_POINT . . . . .  	NUMBER	0001000A 
+REP_IO . . . . . . . . . . . . .  	NUMBER	0040	
+REP_IO_BIT . . . . . . . . . . .  	NUMBER	0006	
+RESERVED_HIGH_BOOST  . . . . . .  	NUMBER	40000000 
+RESERVED_LOW_BOOST . . . . . . .  	NUMBER	0001	
+RESTORE_CLIENT_STATE . . . . . .  	NUMBER	0001008E 
+RESUME_EXEC  . . . . . . . . . .  	NUMBER	00010085 
+RESUME_VM  . . . . . . . . . . .  	NUMBER	0001002C 
+REVERSE_IO . . . . . . . . . . .  	NUMBER	0100	
+REVERSE_IO_BIT . . . . . . . . .  	NUMBER	0008	
+RF_BIT . . . . . . . . . . . . .  	NUMBER	0010	
+RF_MASK  . . . . . . . . . . . .  	NUMBER	00010000 
+RPL_CLR  . . . . . . . . . . . .  	NUMBER	FFFFFFFC 
+RPL_MASK . . . . . . . . . . . .  	NUMBER	0003	
+RW_DATA_TYPE . . . . . . . . . .  	NUMBER	0092	
+R_DATA_TYPE  . . . . . . . . . .  	NUMBER	0090	
+
+SAVE_CLIENT_STATE  . . . . . . .  	NUMBER	0001008D 
+SCHEDULE_GLOBAL_EVENT  . . . . .  	NUMBER	0001000E 
+SCHEDULE_VM_EVENT  . . . . . . .  	NUMBER	0001000F 
+SCSIFD_DEVICE_ID . . . . . . . .  	NUMBER	0024	
+SCSIFD_INIT_ORDER  . . . . . . .  	NUMBER	41400000 
+SCSIMASTER_INIT_ORDER  . . . . .  	NUMBER	41800000 
+SCSI_DEVICE_ID . . . . . . . . .  	NUMBER	0022	
+SELECTOR_MASK  . . . . . . . . .  	NUMBER	FFF8	
+SEL_LOW_MASK . . . . . . . . . .  	NUMBER	00F8	
+SET_DELETE_ON_EXIT_FILE  . . . .  	NUMBER	000100EB 
+SET_DEVICE_FOCUS . . . . . . . .  	NUMBER	000F	
+SET_EXECUTION_FOCUS  . . . . . .  	NUMBER	00010031 
+SET_GLOBAL_TIME_OUT  . . . . . .  	NUMBER	0001003C 
+SET_MONO_CUR_POS . . . . . . . .  	NUMBER	000100E5 
+SET_NMI_HANDLER_ADDR . . . . . .  	NUMBER	00010017 
+SET_PHYSICAL_HMA_ALIAS . . . . .  	NUMBER	000100DD 
+SET_PM_EXEC_MODE . . . . . . . .  	NUMBER	0001008A 
+SET_PM_INT_TYPE  . . . . . . . .  	NUMBER	000100CE 
+SET_PM_INT_VECTOR  . . . . . . .  	NUMBER	00010045 
+SET_SYSTEM_EXIT_CODE . . . . . .  	NUMBER	000100BD 
+SET_TIME_SLICE_GRANULARITY . . .  	NUMBER	00010035 
+SET_TIME_SLICE_PRIORITY  . . . .  	NUMBER	00010033 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-15
+
+
+SET_V86_EXEC_MODE  . . . . . . .  	NUMBER	00010089 
+SET_V86_INT_VECTOR . . . . . . .  	NUMBER	00010043 
+SET_VM_TIME_OUT  . . . . . . . .  	NUMBER	0001003D 
+SF_BIT . . . . . . . . . . . . .  	NUMBER	0007	
+SF_MASK  . . . . . . . . . . . .  	NUMBER	0080	
+SHELL_DEVICE_ID  . . . . . . . .  	NUMBER	0017	
+SHELL_INIT_ORDER . . . . . . . .  	NUMBER	B0000000 
+SIGNAL_SEMAPHORE . . . . . . . .  	NUMBER	00010028 
+SIGNON1  . . . . . . . . . . . .  	L BYTE	0019	_RCODE
+SIGNON2  . . . . . . . . . . . .  	L BYTE	0035	_RCODE
+SIMULATE_FAR_CALL  . . . . . . .  	NUMBER	00010048 
+SIMULATE_FAR_JMP . . . . . . . .  	NUMBER	00010049 
+SIMULATE_FAR_RET . . . . . . . .  	NUMBER	0001004A 
+SIMULATE_FAR_RET_N . . . . . . .  	NUMBER	0001004B 
+SIMULATE_INT . . . . . . . . . .  	NUMBER	00010046 
+SIMULATE_IO  . . . . . . . . . .  	NUMBER	00010094 
+SIMULATE_IRET  . . . . . . . . .  	NUMBER	00010047 
+SIMULATE_POP . . . . . . . . . .  	NUMBER	0001004E 
+SIMULATE_PUSH  . . . . . . . . .  	NUMBER	0001004D 
+SS_ALT . . . . . . . . . . . . .  	NUMBER	0100	
+SS_CAPLOCK . . . . . . . . . . .  	NUMBER	0040	
+SS_CAPLOCK_DN  . . . . . . . . .  	NUMBER	4000	
+SS_CTRL  . . . . . . . . . . . .  	NUMBER	0080	
+SS_EITHER_ALT  . . . . . . . . .  	NUMBER	0808	
+SS_EITHER_CTRL . . . . . . . . .  	NUMBER	0404	
+SS_EITHER_SHIFT  . . . . . . . .  	NUMBER	0202	
+SS_LALT  . . . . . . . . . . . .  	NUMBER	0008	
+SS_LCTRL . . . . . . . . . . . .  	NUMBER	0004	
+SS_LSHIFT  . . . . . . . . . . .  	NUMBER	0002	
+SS_LSHIFT_MASK . . . . . . . . .  	NUMBER	000E	
+SS_NUMLOCK . . . . . . . . . . .  	NUMBER	0020	
+SS_NUMLOCK_DN  . . . . . . . . .  	NUMBER	2000	
+SS_RALT  . . . . . . . . . . . .  	NUMBER	0800	
+SS_RCTRL . . . . . . . . . . . .  	NUMBER	0400	
+SS_RSHIFT  . . . . . . . . . . .  	NUMBER	0200	
+SS_SCRLLOCK  . . . . . . . . . .  	NUMBER	0010	
+SS_SCRLLOCK_DN . . . . . . . . .  	NUMBER	1000	
+SS_SHIFT . . . . . . . . . . . .  	NUMBER	0001	
+SS_SHIFT_MASK  . . . . . . . . .  	NUMBER	0E0E	
+SS_TOGGLE_DN_MASK  . . . . . . .  	NUMBER	7000	
+SS_TOGGLE_MASK . . . . . . . . .  	NUMBER	0070	
+SS_UNUSED  . . . . . . . . . . .  	NUMBER	8000	
+STRING_IO  . . . . . . . . . . .  	NUMBER	0020	
+STRING_IO_BIT  . . . . . . . . .  	NUMBER	0005	
+SUSPEND_VM . . . . . . . . . . .  	NUMBER	0001002B 
+SYSTEM_CONTROL . . . . . . . . .  	NUMBER	00010093 
+SYSTEM_EXIT  . . . . . . . . . .  	NUMBER	0005	
+SYS_CRITICAL_EXIT  . . . . . . .  	NUMBER	0006	
+SYS_CRITICAL_INIT  . . . . . . .  	NUMBER	0000	
+SYS_VM_INIT  . . . . . . . . . .  	NUMBER	0003	
+SYS_VM_TERMINATE . . . . . . . .  	NUMBER	0004	
+
+TABLE_MASK . . . . . . . . . . .  	NUMBER	0004	
+TEST_CUR_VM_HANDLE . . . . . . .  	NUMBER	00010002 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-16
+
+
+TEST_DBCS_LEAD_BYTE  . . . . . .  	NUMBER	000100D1 
+TEST_DEBUG_INSTALLED . . . . . .  	NUMBER	000100C1 
+TEST_REENTER . . . . . . . . . .  	NUMBER	000100C9 
+TEST_SYS_VM_HANDLE . . . . . . .  	NUMBER	00010004 
+TF_BIT . . . . . . . . . . . . .  	NUMBER	0008	
+TF_MASK  . . . . . . . . . . . .  	NUMBER	0100	
+TIME_CRITICAL_BOOST  . . . . . .  	NUMBER	00400000 
+TOGGLE_TO_LED  . . . . . . . . .  	NUMBER	0004	
+TRUE . . . . . . . . . . . . . .  	NUMBER	FFFFFFFF 
+TSRLOAD_DEVICE_ID  . . . . . . .  	NUMBER	001E	
+TS_BIT . . . . . . . . . . . . .  	NUMBER	0003	
+TS_MASK  . . . . . . . . . . . .  	NUMBER	0008	
+
+UNDEFINED_DEVICE_ID  . . . . . .  	NUMBER	0000	
+UNDEFINED_INIT_ORDER . . . . . .  	NUMBER	80000000 
+UNDEF_TOUCH_MEM_INIT_ORDER . . .  	NUMBER	A8000000 
+UNHOOK_INVALID_PAGE_FAULT  . . .  	NUMBER	000100EA 
+UPDATE_SYSTEM_CLOCK  . . . . . .  	NUMBER	000100C0 
+
+V86MMGR_DEVICE_ID  . . . . . . .  	NUMBER	0006	
+V86MMGR_INIT_ORDER . . . . . . .  	NUMBER	A0000000 
+VALIDATE_CLIENT_PTR  . . . . . .  	NUMBER	000100C8 
+VALIDATE_VM_HANDLE . . . . . . .  	NUMBER	00010005 
+VCD_DEVICE_ID  . . . . . . . . .  	NUMBER	000E	
+VCD_INIT_ORDER . . . . . . . . .  	NUMBER	30000000 
+VDD2_DEVICE_ID . . . . . . . . .  	NUMBER	001C	
+VDD_CHECK_UPDATE_SOON  . . . . .  	NUMBER	000A000D 
+VDD_DEVICE_ID  . . . . . . . . .  	NUMBER	000A	
+VDD_GET_GRABRTN  . . . . . . . .  	NUMBER	000A0002 
+VDD_GET_MODTIME  . . . . . . . .  	NUMBER	000A0005 
+VDD_GET_VERSION  . . . . . . . .  	NUMBER	000A0000 
+VDD_HIDE_CURSOR  . . . . . . . .  	NUMBER	000A0003 
+VDD_INIT_ORDER . . . . . . . . .  	NUMBER	28000000 
+VDD_MSG_BAKCOLOR . . . . . . . .  	NUMBER	000A0009 
+VDD_MSG_CLRSCRN  . . . . . . . .  	NUMBER	000A0007 
+VDD_MSG_FORCOLOR . . . . . . . .  	NUMBER	000A0008 
+VDD_MSG_SETCURSPOS . . . . . . .  	NUMBER	000A000B 
+VDD_MSG_TEXTOUT  . . . . . . . .  	NUMBER	000A000A 
+VDD_PIF_STATE  . . . . . . . . .  	NUMBER	000A0001 
+VDD_QUERY_ACCESS . . . . . . . .  	NUMBER	000A000C 
+VDD_SET_HCURTRK  . . . . . . . .  	NUMBER	000A0006 
+VDD_SET_VMTYPE . . . . . . . . .  	NUMBER	000A0004 
+VDD_VERNUM . . . . . . . . . . .  	NUMBER	03FF	
+VDMAD_DEVICE_ID  . . . . . . . .  	NUMBER	0004	
+VDMAD_INIT_ORDER . . . . . . . .  	NUMBER	90000000 
+VFD_DEVICE_ID  . . . . . . . . .  	NUMBER	001B	
+VFD_INIT_ORDER . . . . . . . . .  	NUMBER	44000000 
+VKD_API_VERSION  . . . . . . . .  	NUMBER	0000	
+VKD_CANCEL_HOT_KEY_STATE . . . .  	NUMBER	000D0006 
+VKD_CANCEL_PASTE . . . . . . . .  	NUMBER	000D000B 
+VKD_CURRENT_VERSION  . . . . . .  	NUMBER	0200	
+VKD_DEFINE_HOT_KEY . . . . . . .  	NUMBER	000D0001 
+VKD_DEFINE_PASTE_MODE  . . . . .  	NUMBER	000D0009 
+VKD_DEVICE_ID  . . . . . . . . .  	NUMBER	000D	
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-17
+
+
+VKD_FLUSH_MSG_KEY_QUEUE  . . . .  	NUMBER	000D000E 
+VKD_FORCE_KEY  . . . . . . . . .  	NUMBER	0001	
+VKD_FORCE_KEYS . . . . . . . . .  	NUMBER	000D0007 
+VKD_GET_KBD_OWNER  . . . . . . .  	NUMBER	000D0008 
+VKD_GET_MSG_KEY  . . . . . . . .  	NUMBER	000D000C 
+VKD_GET_VERSION  . . . . . . . .  	NUMBER	000D0000 
+VKD_INIT_ORDER . . . . . . . . .  	NUMBER	38000000 
+VKD_LOCAL_DISABLE_HOT_KEY  . . .  	NUMBER	000D0004 
+VKD_LOCAL_ENABLE_HOT_KEY . . . .  	NUMBER	000D0003 
+VKD_PEEK_MSG_KEY . . . . . . . .  	NUMBER	000D000D 
+VKD_REFLECT_HOT_KEY  . . . . . .  	NUMBER	000D0005 
+VKD_REMOVE_HOT_KEY . . . . . . .  	NUMBER	000D0002 
+VKD_START_PASTE  . . . . . . . .  	NUMBER	000D000A 
+VKD_VERSION  . . . . . . . . . .  	NUMBER	0200	
+VMCPD_DEVICE_ID  . . . . . . . .  	NUMBER	0011	
+VMCPD_INIT_ORDER . . . . . . . .  	NUMBER	48000000 
+VMD_DEVICE_ID  . . . . . . . . .  	NUMBER	000C	
+VMD_INIT_ORDER . . . . . . . . .  	NUMBER	34000000 
+VMM_DEVICE_ID  . . . . . . . . .  	NUMBER	0001	
+VMM_INIT_ORDER . . . . . . . . .  	NUMBER	0000	
+VMPOLL_DEVICE_ID . . . . . . . .  	NUMBER	0018	
+VMPOLL_INIT_ORDER  . . . . . . .  	NUMBER	64000000 
+VMSTAT_AWAKENING . . . . . . . .  	NUMBER	0800	
+VMSTAT_AWAKENING_BIT . . . . . .  	NUMBER	000B	
+VMSTAT_BACKGROUND  . . . . . . .  	NUMBER	0002	
+VMSTAT_BACKGROUND_BIT  . . . . .  	NUMBER	0001	
+VMSTAT_BLOCKED . . . . . . . . .  	NUMBER	0400	
+VMSTAT_BLOCKED_BIT . . . . . . .  	NUMBER	000A	
+VMSTAT_CLOSING . . . . . . . . .  	NUMBER	00010000 
+VMSTAT_CLOSING_BIT . . . . . . .  	NUMBER	0010	
+VMSTAT_CREATING  . . . . . . . .  	NUMBER	0004	
+VMSTAT_CREATING_BIT  . . . . . .  	NUMBER	0002	
+VMSTAT_EXCLUSIVE . . . . . . . .  	NUMBER	0001	
+VMSTAT_EXCLUSIVE_BIT . . . . . .  	NUMBER	0000	
+VMSTAT_HIGH_PRI_BACK . . . . . .  	NUMBER	0200	
+VMSTAT_HIGH_PRI_BACK_BIT . . . .  	NUMBER	0009	
+VMSTAT_IDLE  . . . . . . . . . .  	NUMBER	8000	
+VMSTAT_IDLE_BIT  . . . . . . . .  	NUMBER	000F	
+VMSTAT_NOT_EXECUTEABLE . . . . .  	NUMBER	0010	
+VMSTAT_NOT_EXECUTEABLE_BIT . . .  	NUMBER	0004	
+VMSTAT_PAGEABLEV86 . . . . . . .  	NUMBER	1000	
+VMSTAT_PAGEABLEV86BIT  . . . . .  	NUMBER	000C	
+VMSTAT_PM_APP  . . . . . . . . .  	NUMBER	0040	
+VMSTAT_PM_APP_BIT  . . . . . . .  	NUMBER	0006	
+VMSTAT_PM_EXEC . . . . . . . . .  	NUMBER	0020	
+VMSTAT_PM_EXEC_BIT . . . . . . .  	NUMBER	0005	
+VMSTAT_PM_USE32  . . . . . . . .  	NUMBER	0080	
+VMSTAT_PM_USE32_BIT  . . . . . .  	NUMBER	0007	
+VMSTAT_SUSPENDED . . . . . . . .  	NUMBER	0008	
+VMSTAT_SUSPENDED_BIT . . . . . .  	NUMBER	0003	
+VMSTAT_TS_SCHED  . . . . . . . .  	NUMBER	4000	
+VMSTAT_TS_SCHED_BIT  . . . . . .  	NUMBER	000E	
+VMSTAT_USE32_MASK  . . . . . . .  	NUMBER	0180	
+VMSTAT_V86INTSLOCKED . . . . . .  	NUMBER	2000	
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-18
+
+
+VMSTAT_V86INTSLOCKEDBIT  . . . .  	NUMBER	000D	
+VMSTAT_VXD_EXEC  . . . . . . . .  	NUMBER	0100	
+VMSTAT_VXD_EXEC_BIT  . . . . . .  	NUMBER	0008	
+VMTD_Init_Complete . . . . . . .  	N PROC	0089	_ITEXT	Global	Length = 0017
+VM_BIT . . . . . . . . . . . . .  	NUMBER	0011	
+VM_CRITICAL_INIT . . . . . . . .  	NUMBER	0008	
+VM_INIT  . . . . . . . . . . . .  	NUMBER	0009	
+VM_MASK  . . . . . . . . . . . .  	NUMBER	00020000 
+VM_NOT_EXECUTEABLE . . . . . . .  	NUMBER	000B	
+VM_RESUME  . . . . . . . . . . .  	NUMBER	000E	
+VM_SUSPEND . . . . . . . . . . .  	NUMBER	000D	
+VM_TERMINATE . . . . . . . . . .  	NUMBER	000A	
+VNETBIOS_DEVICE_ID . . . . . . .  	NUMBER	0014	
+VNETBIOS_INIT_ORDER  . . . . . .  	NUMBER	54000000 
+VNE_CLOSED . . . . . . . . . . .  	NUMBER	0020	
+VNE_CLOSED_BIT . . . . . . . . .  	NUMBER	0005	
+VNE_CRASHED  . . . . . . . . . .  	NUMBER	0001	
+VNE_CRASHED_BIT  . . . . . . . .  	NUMBER	0000	
+VNE_CREATEFAIL . . . . . . . . .  	NUMBER	0004	
+VNE_CREATEFAIL_BIT . . . . . . .  	NUMBER	0002	
+VNE_CRINITFAIL . . . . . . . . .  	NUMBER	0008	
+VNE_CRINITFAIL_BIT . . . . . . .  	NUMBER	0003	
+VNE_INITFAIL . . . . . . . . . .  	NUMBER	0010	
+VNE_INITFAIL_BIT . . . . . . . .  	NUMBER	0004	
+VNE_NUKED  . . . . . . . . . . .  	NUMBER	0002	
+VNE_NUKED_BIT  . . . . . . . . .  	NUMBER	0001	
+VPD_DEVICE_ID  . . . . . . . . .  	NUMBER	000F	
+VPD_INIT_ORDER . . . . . . . . .  	NUMBER	3C000000 
+VPEND_DEVICE_ID  . . . . . . . .  	NUMBER	0025	
+VPICD_DEVICE_ID  . . . . . . . .  	NUMBER	0003	
+VPICD_INIT_ORDER . . . . . . . .  	NUMBER	0C000000 
+VPROD_DEVICE_ID  . . . . . . . .  	NUMBER	0019	
+VPROD_INIT_ORDER . . . . . . . .  	NUMBER	08000000 
+VSD_DEVICE_ID  . . . . . . . . .  	NUMBER	000B	
+VSD_INIT_ORDER . . . . . . . . .  	NUMBER	2C000000 
+VTD_DEVICE_ID  . . . . . . . . .  	NUMBER	0005	
+VTD_INIT_ORDER . . . . . . . . .  	NUMBER	14000000 
+VXD_CODE_ENDS  . . . . . . . . .  	TEXT  VxD_LOCKED_CODE_ENDS		
+VXD_CODE_SEG . . . . . . . . . .  	TEXT  VxD_LOCKED_CODE_SEG		
+VXD_DATA_ENDS  . . . . . . . . .  	TEXT  VxD_LOCKED_DATA_ENDS		
+VXD_DATA_SEG . . . . . . . . . .  	TEXT  VxD_LOCKED_DATA_SEG		
+
+WAIT_SEMAPHORE . . . . . . . . .  	NUMBER	00010027 
+WAKE_UP_VM . . . . . . . . . . .  	NUMBER	00010039 
+WINDEBUG_DEVICE_ID . . . . . . .  	NUMBER	001D	
+WINDEBUG_INIT_ORDER  . . . . . .  	NUMBER	81000000 
+WINLOAD_DEVICE_ID  . . . . . . .  	NUMBER	0016	
+WINLOAD_INIT_ORDER . . . . . . .  	NUMBER	60000000 
+WORD_INPUT . . . . . . . . . . .  	NUMBER	0008	
+WORD_IO  . . . . . . . . . . . .  	NUMBER	0008	
+WORD_IO_BIT  . . . . . . . . . .  	NUMBER	0003	
+WORD_OUTPUT  . . . . . . . . . .  	NUMBER	000C	
+
+ZF_BIT . . . . . . . . . . . . .  	NUMBER	0006	
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-19
+
+
+ZF_MASK  . . . . . . . . . . . .  	NUMBER	0040	
+
+??0000 . . . . . . . . . . . . .  	TEXT  OFFSET32 MT_PM_API_Proc		
+??0001 . . . . . . . . . . . . .  	TEXT  OFFSET32 MT_PM_API_Proc		
+??0002 . . . . . . . . . . . . .  	NUMBER	0000	
+??0003 . . . . . . . . . . . . .  	NUMBER	0000	
+??000C . . . . . . . . . . . . .  	L NEAR	00D3	_LTEXT
+??000D . . . . . . . . . . . . .  	L NEAR	00DD	_LTEXT
+??000E . . . . . . . . . . . . .  	L NEAR	00E7	_LTEXT
+??0011 . . . . . . . . . . . . .  	L BYTE	0044	_LDATA
+??0014 . . . . . . . . . . . . .  	L BYTE	005E	_LDATA
+??0017 . . . . . . . . . . . . .  	L BYTE	0076	_LDATA
+??_ASYNC_SERVICE . . . . . . . .  	NUMBER	0000	
+??_CODE  . . . . . . . . . . . .  	NUMBER	0001	
+??_CUR_CODE_SEG  . . . . . . . .  	NUMBER	0000	
+??_ICODE . . . . . . . . . . . .  	NUMBER	0002	
+??_LCODE . . . . . . . . . . . .  	NUMBER	0003	
+??_NO_LOG  . . . . . . . . . . .  	NUMBER	0000	
+??_RCODE . . . . . . . . . . . .  	NUMBER	0004	
+??_SERVICE . . . . . . . . . . .  	NUMBER	0000	
+?_CODE . . . . . . . . . . . . .  	TEXT  (??_CUR_CODE_SEG MOD 8) - ??_CODE		
+?_ICODE  . . . . . . . . . . . .  	TEXT  (??_CUR_CODE_SEG MOD 8) - ??_ICODE		
+?_LCODE  . . . . . . . . . . . .  	TEXT  (??_CUR_CODE_SEG MOD 8) - ??_LCODE		
+?_RCODE  . . . . . . . . . . . .  	TEXT  (??_CUR_CODE_SEG MOD 8) - ??_RCODE		
+@CPU . . . . . . . . . . . . . .  	TEXT  3471		
+@FILENAME  . . . . . . . . . . .  	TEXT  vmtd		
+@VERSION . . . . . . . . . . . .  	TEXT  510		
+_ADDFREEPHYSPAGE . . . . . . . .  	NUMBER	000100D2 
+_ADDINSTANCEITEM . . . . . . . .  	NUMBER	000100A6 
+_ADD_GLOBAL_V86_DATA_AREA  . . .  	NUMBER	000100DF 
+_ALLOCATE_DEVICE_CB_AREA . . . .  	NUMBER	000100A7 
+_ALLOCATE_GDT_SELECTOR . . . . .  	NUMBER	00010076 
+_ALLOCATE_GLOBAL_V86_DATA_AREA .  	NUMBER	000100A8 
+_ALLOCATE_LDT_SELECTOR . . . . .  	NUMBER	00010078 
+_ALLOCATE_TEMP_V86_DATA_AREA . .  	NUMBER	000100A9 
+_ASSIGN_DEVICE_V86_PAGES . . . .  	NUMBER	00010072 
+_BUILDDESCRIPTORDWORDS . . . . .  	NUMBER	0001007A 
+_COPYPAGETABLE . . . . . . . . .  	NUMBER	00010061 
+_DEASSIGN_DEVICE_V86_PAGES . . .  	NUMBER	00010073 
+_FREE_GDT_SELECTOR . . . . . . .  	NUMBER	00010077 
+_FREE_LDT_SELECTOR . . . . . . .  	NUMBER	00010079 
+_FREE_TEMP_V86_DATA_AREA . . . .  	NUMBER	000100AA 
+_GETAPPFLATDSALIAS . . . . . . .  	NUMBER	0001006D 
+_GETDEMANDPAGEINFO . . . . . . .  	NUMBER	0001006F 
+_GETDESCRIPTOR . . . . . . . . .  	NUMBER	0001007B 
+_GETFIRSTV86PAGE . . . . . . . .  	NUMBER	0001006B 
+_GETFREEPAGECOUNT  . . . . . . .  	NUMBER	0001005A 
+_GETGLBLRNG0V86INTBASE . . . . .  	NUMBER	000100DE 
+_GETLASTV86PAGE  . . . . . . . .  	NUMBER	000100D5 
+_GETNULPAGEHANDLE  . . . . . . .  	NUMBER	0001006A 
+_GETSETPAGEOUTCOUNT  . . . . . .  	NUMBER	00010070 
+_GETSYSPAGECOUNT . . . . . . . .  	NUMBER	0001005B 
+_GETV86PAGEABLEARRAY . . . . . .  	NUMBER	00010066 
+_GETVMPGCOUNT  . . . . . . . . .  	NUMBER	0001005C 
+Microsoft (R) Macro Assembler Version 5.10B                 11/3/23 18:51:05
+VMTD - MultiTasking DOS VxD                                 Symbols-20
+
+
+_GET_DEVICE_V86_PAGES_ARRAY  . .  	NUMBER	00010074 
+_HEAPALLOCATE  . . . . . . . . .  	NUMBER	0001004F 
+_HEAPFREE  . . . . . . . . . . .  	NUMBER	00010051 
+_HEAPGETSIZE . . . . . . . . . .  	NUMBER	00010052 
+_HEAPREALLOCATE  . . . . . . . .  	NUMBER	00010050 
+_LINMAPINTOV86 . . . . . . . . .  	NUMBER	00010062 
+_LINPAGELOCK . . . . . . . . . .  	NUMBER	00010063 
+_LINPAGEUNLOCK . . . . . . . . .  	NUMBER	00010064 
+_MAPFREEPHYSREG  . . . . . . . .  	NUMBER	000100D6 
+_MAPINTOV86  . . . . . . . . . .  	NUMBER	0001005D 
+_MAPPHYSTOLINEAR . . . . . . . .  	NUMBER	0001006C 
+_MMGR_TOGGLE_HMA . . . . . . . .  	NUMBER	0001007D 
+_MODIFYPAGEBITS  . . . . . . . .  	NUMBER	00010060 
+_PAGEALLOCATE  . . . . . . . . .  	NUMBER	00010053 
+_PAGECHECKLINRANGE . . . . . . .  	NUMBER	00010067 
+_PAGEDISCARDPAGES  . . . . . . .  	NUMBER	00010069 
+_PAGEFREE  . . . . . . . . . . .  	NUMBER	00010055 
+_PAGEGETALLOCINFO  . . . . . . .  	NUMBER	00010059 
+_PAGEGETSIZEADDR . . . . . . . .  	NUMBER	00010058 
+_PAGELOCK  . . . . . . . . . . .  	NUMBER	00010056 
+_PAGEOUTDIRTYPAGES . . . . . . .  	NUMBER	00010068 
+_PAGEREALLOCATE  . . . . . . . .  	NUMBER	00010054 
+_PAGERESETHANDLEPADDR  . . . . .  	NUMBER	000100D3 
+_PAGEUNLOCK  . . . . . . . . . .  	NUMBER	00010057 
+_PHYSINTOV86 . . . . . . . . . .  	NUMBER	0001005E 
+_SELECTORMAPFLAT . . . . . . . .  	NUMBER	0001006E 
+_SETDESCRIPTOR . . . . . . . . .  	NUMBER	0001007C 
+_SETFREEPHYSREGCALBK . . . . . .  	NUMBER	000100D9 
+_SETLASTV86PAGE  . . . . . . . .  	NUMBER	000100D4 
+_SETRESETV86PAGEABLE . . . . . .  	NUMBER	00010065 
+_TESTGLOBALV86MEM  . . . . . . .  	NUMBER	0001005F 
+_UNMAPFREEPHYSREG  . . . . . . .  	NUMBER	000100D7 
+_XCHGFREEPHYSREG . . . . . . . .  	NUMBER	000100D8 
+
+
+   3612 Source  Lines
+   7738 Total   Lines
+   1018 Symbols
+
+  45020 + 150437 Bytes symbol space free
+
+      0 Warning Errors
+      0 Severe  Errors

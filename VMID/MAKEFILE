@@ -1,0 +1,78 @@
+# Makefile for VMTD and DOS-based programs. CREATEVM needs to be compiled
+# with Microsoft Visual C/C++ 1.5
+
+#DEBUG_VMID     =   TRUE                ; comment out for final build
+
+
+OUTPUT  =   aux
+WINAPPS =   c:\mwin
+WINLIB  =   c:\MSVC\lib
+WININC  =   c:\MSVC\include
+!IFNDEF WINDIR
+WINDIR  =   c:\mwin
+!ENDIF
+
+
+#
+# for VMID.EXE build; DOS app
+#
+!IFDEF DEBUG_VMID
+IDAS =   masm /Zi
+IDCC =   cl -c -Zi /I$(WININC)
+IDLN =   link /Co
+IDZZ =   VMID: ***** DEBUG ***** DEBUG ***** DEBUG ***** DEBUG *****
+!ELSE
+IDAS =   masm
+IDCC =   cl -c /I$(WININC)
+IDLN =   link
+IDZZ =   VMID: **** RELEASE *** RELEASE *** RELEASE *** RELEASE ****
+!ENDIF
+
+IDSRCS   =   vmid.c
+IDOBJS   =   vmid.obj
+
+
+#
+# now the rules
+#
+all         :   vmid.exe
+                @echo ================= BUILD COMPLETE ===================
+                @echo $(IDZZ)
+                @echo ================= BUILD COMPLETE ===================
+
+
+# VMID.EXE
+vmid.exe :      $(IDOBJS)
+                $(IDLN) @vmid.lnk
+                @echo $(IDZZ)
+
+vmid.obj :      vmid.c
+                $(IDCC) $*.c
+                
+                
+# MISC JUNK
+clean   :
+            del *.386
+            del *.lib
+            del *.dll
+            del *.exe
+            del *.res
+            del *.obj
+            del *.sym
+            del *.map
+            del *.lst
+            del *.zip
+
+zip     :   clean
+            pkzip -a vmtd.zip *.*
+
+ship    :   all
+            del *.lib
+            del *.res
+            del *.obj
+            del *.sym
+            del *.map
+            del *.lst
+            del *.zip
+            touch /n *.*
+            pkzip -a vmtd.zip *.*

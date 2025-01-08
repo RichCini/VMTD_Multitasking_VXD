@@ -1,0 +1,88 @@
+# Makefile for VMTD and DOS-based programs. CREATEVM needs to be compiled
+# with Microsoft Visual C/C++ 1.5
+
+#DEBUG_CVM	=   TRUE                ; comment out for final build
+
+
+OUTPUT  =   aux
+WINAPPS =   c:\mwin
+WINLIB  =   c:\windev\lib
+WININC  =   c:\windev\include
+MSCLIB  =   c:\msvc\lib
+!IFNDEF WINDIR
+WINDIR  =   c:\mwin
+!ENDIF
+
+
+#
+# for CVM.EXE build; DOS app
+#
+!IFDEF DEBUG_CVM
+CVDAS =   masm /Zi
+CVDCC =   cl -c -Zi -I.
+CVDLN =   link /Co /B
+CVDZZ =   CVMDOS: ***** DEBUG ***** DEBUG ***** DEBUG ***** DEBUG *****
+!ELSE
+CVDAS =   masm
+CVDCC =   cl -c -I.
+CVDLN =   link /B
+CVDZZ =   CVMDOS: **** RELEASE *** RELEASE *** RELEASE *** RELEASE ****
+!ENDIF
+
+#CVDINCS   =   dpmish.h
+#CVDSRCS   =   dpmish.c cvm.c
+CVDOBJS	  =   dpmish.obj cvm.obj ctrl_c.obj
+
+
+#
+# now the rules
+#
+all         :   cvm.exe
+                @echo ================= BUILD COMPLETE ===================
+                @echo $(CVDZZ)
+                @echo ================= BUILD COMPLETE ===================
+
+
+# CVM.EXE
+cvm.exe :       $(CVDOBJS)
+                $(CVDLN) @cvm.lnk
+                @echo $(CVDZZ)
+                @echo $(CVDZZ)
+                @echo $(CVDZZ)
+
+cvm.obj :       cvm.c
+                $(CVDCC) $*.c
+
+dpmish.obj :    dpmish.c
+                $(CVDCC) $*.c
+
+ctrl_c.obj:	ctrl_c.asm
+		$(CVDAS) $*.asm,$*.obj,$*.lst,, 
+                      
+                
+# MISC JUNK
+clean   :
+            del *.386
+            del *.lib
+            del *.dll
+            del *.exe
+            del *.res
+            del *.obj
+            del *.sym
+            del *.map
+            del *.lst
+            del *.zip
+
+zip     :   clean
+            pkzip -a cvm.zip *.*
+
+ship    :   all
+            del *.lib
+            del *.res
+            del *.obj
+            del *.sym
+            del *.map
+            del *.lst
+            del *.zip
+            touch /n *.*
+            pkzip -a cvm.zip *.*
