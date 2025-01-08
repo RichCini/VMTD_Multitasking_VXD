@@ -1,11 +1,11 @@
 # Multitasking DOS VxD
 ## VMTD
 This is a repository of the source files for a Windows 3.1 virtual device driver
-(VxD) which essentially hacks Windows 3.1 to become a basic multitasking
-version of MS-DOS. All of the underpinnings of Windows are there, but it
-has a regular COMMAND.COM interface. 
+(VxD) which essentially hacks Enhanced Mode Windows 3.1 to become a basic 
+multitasking version of MS-DOS (although, at best, a proof-of-concept). All of
+the underpinnings of Windows are there, but it has a regular COMMAND.COM interface. 
 
-The code, written in 1996 by James Eli, compiles several utilities including a 
+The code, written in 1996 by James Eli, is for several utilities including a 
 virtual device driver and four utilities to manage creating and switching 
 the virtual machines. It uses INT 2Fh multiplex calls and undocumented calls
 to the Shell VxD to work its magic.
