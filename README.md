@@ -12,6 +12,6 @@ to the Shell VxD to work its magic.
 
 I downloaded this code many years ago based on an article in one of my usual
 computer programming magazines. Unfortunately, I can neither locate the original
-article copy nor remember which magzaine it was in...my guess is either Dr. Dobbs
-or PC/Magazine. Something this unsanctioned wouldn't be allowed in the
+article copy nor remember which magzaine it was in...my guess is either Dr. Dobbs,
+PC World, or PC/Magazine. Something this unsanctioned wouldn't be allowed in the
 Microsoft Systems Journal!
